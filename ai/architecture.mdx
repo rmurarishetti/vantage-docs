@@ -1,63 +1,39 @@
 ---
 title: "AI Architecture"
-description: "How the AI advisor routes, reasons, and responds."
+description: "How the AI advisor routes, reasons, and responds — from your question to a streamed answer."
 ---
 
-## Request flow
+## Overview
 
-```
-Flutter app sends message
-  ↓
-POST /ai/ask  (SSE streaming endpoint)
-  ↓
-┌─────────────────────────────────────────┐
-│ Two-tier intent router                  │
-│                                         │
-│  1. Regex classifier                    │
-│     ~70% of queries matched instantly   │
-│     patterns per domain (no LLM call)  │
-│                                         │
-│  2. Claude Haiku fallback               │
-│     for ambiguous/multi-domain queries  │
-└─────────────────────────────────────────┘
-  ↓
-Domain: cashflow | investment | debt | wealth | market
-  ↓
-┌─────────────────────────────────────────┐
-│ Specialist (Claude Sonnet)              │
-│                                         │
-│ Tool-use loop:                          │
-│  1. Claude decides which tools to call  │
-│  2. Tools execute (parallel where safe) │
-│  3. Results appended to messages        │
-│  4. Loop until no more tool calls       │
-│  5. Stream final response               │
-└─────────────────────────────────────────┘
-  ↓
-SSE stream: phase events, tool events, tokens, done
-  ↓
-Flutter chat UI (real-time rendering)
+Every question you ask goes through a two-stage pipeline: a **fast intent router** that classifies your question without burning tokens, followed by a **Claude Sonnet specialist** that runs a deterministic tool-use loop against your real data.
+
+```mermaid
+flowchart TD
+    A([Flutter: POST /ai/stream]) --> B{Two-tier router}
+    B -->|regex match ~70%| C[Domain label]
+    B -->|ambiguous| D[Claude Haiku\none-shot classifier]
+    D --> C
+    C --> E{Specialist\nClaude Sonnet}
+    E -->|tool_use| F[Tool executor\nasyncio.gather]
+    F -->|results| E
+    E -->|end_turn| G[Stream final response]
+    G --> H([SSE → Flutter chat UI])
+
+    style A fill:#10B981,color:#fff
+    style H fill:#10B981,color:#fff
+    style E fill:#1C1E26,color:#F0F2F5
+    style F fill:#1C1E26,color:#F0F2F5
 ```
 
 ---
 
-## SSE event types
+## Stage 1: Intent router
 
-The backend streams Server-Sent Events. Flutter reacts to each:
+The router assigns one of five domain labels: `cashflow`, `investment`, `debt`, `wealth`, or `market`.
 
-| Event | Payload | UI effect |
-|-------|---------|----------|
-| `phase` | `thinking` / `generating` | Loading indicator phase |
-| `tool` | `{name, status: "calling"}` | "Analyzing spending by category..." |
-| `token` | `{text}` | Streaming text appended to bubble |
-| `done` | `{text, widgets, suggestions, tools_used, agent_used}` | Finalise message |
-| `error` | `{text}` | Error message shown |
+### Step 1 — Regex classifier (no LLM call)
 
----
-
-## Intent routing
-
-The regex classifier uses domain-specific keyword patterns:
+About 70% of queries are classified instantly by matching domain-specific keyword patterns:
 
 ```python
 CASHFLOW_PATTERNS = [
@@ -70,37 +46,139 @@ INVESTMENT_PATTERNS = [
     r'\b(stock|portfolio|holding|crypto|bitcoin|etf|market)\b',
     r'\b(gain|loss|return|p&l|price|allocation|dividend)\b',
 ]
-# ... etc for debt, wealth, market
+
+DEBT_PATTERNS = [
+    r'\b(loan|debt|owe|credit card|utilization|payoff|balance)\b',
+    r'\b(interest|apr|installment|repay|minimum payment)\b',
+]
+
+WEALTH_PATTERNS = [
+    r'\b(net worth|savings rate|assets|liabilities|wealth|transfer)\b',
+    r'\b(financial health|balance sheet|cashflow|emergency fund)\b',
+]
+
+MARKET_PATTERNS = [
+    r'\b(price|quote|ticker|aapl|btc|eth|market cap|52-week)\b',
+    r'\b(compare|vs|versus|performance|return)\b',
+]
 ```
 
-If a query matches multiple domains, Haiku classifies with a one-shot prompt that returns a domain label in JSON.
+### Step 2 — Haiku fallback
 
----
-
-## Tool-use loop
-
-The specialist runs Claude Sonnet with all domain tools registered. Claude decides which tools to call based on the question:
+If a query matches multiple domains, or matches none, a one-shot Claude Haiku call resolves it:
 
 ```python
-while True:
-    response = claude.messages.create(
-        model="claude-sonnet-4-5",
-        tools=domain_tools,
-        messages=messages,
-    )
-    if response.stop_reason == "end_turn":
-        break
-    # execute tool calls, append results, loop
-    tool_results = await execute_tools(response.content)
-    messages.extend(tool_results)
+prompt = f"""Classify this financial question into exactly one domain.
+Domains: cashflow | investment | debt | wealth | market
+
+Question: {user_message}
+
+Respond with JSON only: {{"domain": "<label>"}}"""
 ```
 
-Tools that fetch independent data (e.g. `get_spending_by_category` + `get_budget_status`) run in parallel using `asyncio.gather`.
+Haiku returns a domain label in ~200ms. The cost per call is negligible (< $0.001).
 
 ---
 
-## Conversation history
+## Stage 2: Specialist tool-use loop
 
-The Flutter app sends the last 10 messages (5 exchanges) as context with each request. The backend converts Flutter's `{text, isUser}` format to Claude's `{role, content}` format.
+The specialist is Claude Sonnet with all tools for the matched domain pre-registered. Claude decides which tools to call, in what order, and when it has enough information to answer.
 
-Conversation history is also persisted to Supabase (`ai_conversations` table) so context survives app restarts.
+```python
+async def run_specialist_full_stream(domain, messages, user_id):
+    domain_tools = TOOL_REGISTRY[domain]
+    conversation = build_conversation(messages, user_id)
+
+    while True:
+        response = await claude_sonnet.messages.create(
+            model="claude-sonnet-4-5",
+            tools=domain_tools,
+            messages=conversation,
+            stream=True,
+        )
+
+        # Stream phase/token events to Flutter as they arrive
+        async for event in response:
+            yield event
+
+        if response.stop_reason == "end_turn":
+            break
+
+        # Execute tool calls (parallel where independent)
+        tool_results = await asyncio.gather(*[
+            execute_tool(tc) for tc in response.tool_use_blocks
+        ])
+        conversation.extend(tool_results)
+```
+
+Tools that fetch independent data (e.g. `query_transactions` + `get_budgets`) run concurrently via `asyncio.gather`. Tools with dependencies run sequentially within the same loop iteration.
+
+---
+
+## SSE event stream
+
+The `/ai/stream` endpoint sends Server-Sent Events. The Flutter app reacts to each event in real time:
+
+| Event type | Payload | Flutter UI effect |
+|------------|---------|-------------------|
+| `phase` | `"thinking"` | Animated dots — "Thinking..." |
+| `phase` | `"generating"` | Animated dots — "Generating..." |
+| `tool` | `{name, status: "calling"}` | Tool badge: "Analyzing transactions..." |
+| `token` | `{text}` | Streamed text appended to chat bubble |
+| `done` | `{text, widgets, suggestions, tools_used, agent_used}` | Finalize message, render widgets |
+| `error` | `{message}` | Error bubble shown |
+
+### Widget responses
+
+When the answer is better expressed as a chart or card, Claude returns structured JSON in the `done` event `widgets` field, which Flutter's `widget_renderer.dart` renders natively:
+
+```json
+{
+  "type": "chart",
+  "chart_type": "bar",
+  "title": "Spending by Category — March",
+  "data": {
+    "labels": ["Food", "Transport", "Shopping"],
+    "values": [420, 180, 310]
+  }
+}
+```
+
+---
+
+## Background pipelines
+
+Two background jobs run outside the request cycle:
+
+### Daily insights (APScheduler — 2 AM daily)
+
+The `AnomalyAlerts` agent runs over the last 90 days of transactions and writes alerts to the `user_insights` Supabase table. The Dashboard reads from this table in real time.
+
+Three detection methods run on every cycle:
+
+| Method | Technique | Example alert |
+|--------|-----------|---------------|
+| Category spend anomaly | Z-score (threshold: 2σ) | "Food spend this week is 3.2× your weekly average" |
+| Duplicate charges | Same merchant + amount within 24h | "Possible duplicate: $12.90 at Starbucks (×2 today)" |
+| Budget threshold | MTD spend vs budget limit | "Shopping budget 87% used with 10 days left" |
+
+### Weekly newsletter (APScheduler — Sunday 3 AM)
+
+The `NewsletterGenerator` agent compiles a portfolio summary, top movers, and AI-curated market commentary. Delivered via push notification.
+
+---
+
+## Conversation memory
+
+The Flutter app sends the last 10 messages (5 exchanges) as context with each `/stream` request. The backend converts Flutter's `{text, isUser}` format to Claude's `{role: "user"|"assistant", content}` format before passing to the specialist.
+
+All conversations are persisted to Supabase (`ai_conversations` table) so context survives app restarts.
+
+---
+
+## Security
+
+- Every request carries a Supabase JWT in `Authorization: Bearer <token>`
+- The backend validates the JWT using Supabase's JWKS endpoint before any data access
+- All Supabase queries use the authenticated service client with RLS enforced — a user can never query another user's data through the AI
+- The raw notification text (not the full notification object) is all that reaches Claude for parsing

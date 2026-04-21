@@ -1,71 +1,235 @@
 ---
 title: "AI Tools Reference"
-description: "All 35 deterministic tools available to the AI advisor."
+description: "Every deterministic tool available to the AI advisor — what it fetches, what it answers."
 ---
 
-The AI advisor uses deterministic tools to fetch your real data. No numbers are made up — every answer is sourced from one of these tools.
+The AI advisor uses deterministic tools to query your real data. No numbers are made up — every figure in an answer is sourced from one of these tools running against your Supabase database.
+
+<Info>
+Tools run server-side in Python. Claude Sonnet decides which tools to call based on your question. Independent tools run in parallel via `asyncio.gather`.
+</Info>
+
+---
 
 ## Cash Flow Tools
 
-| Tool | Description |
-|------|-------------|
-| `get_spending_by_category` | Total spend per category for a date range. Optional category filter. |
-| `get_spending_by_merchant` | Top merchants ranked by spend, with transaction count. |
-| `get_spending_trend` | Monthly spend trajectory over 6+ months. |
-| `get_transactions` | Individual transactions with filters (category, merchant, amount range, date). |
-| `get_budget_status` | Budget vs actual comparison with % used alerts. |
-| `get_recurring_transactions` | Detects subscriptions from 90-day patterns. Returns merchant, estimated monthly cost. |
-| `compare_spending_periods` | Side-by-side category comparison between two date ranges. |
-| `get_income_summary` | Income totals grouped by source/merchant. |
+<AccordionGroup>
+  <Accordion title="query_transactions" icon="list">
+    Fetches and summarises recent transactions.
 
-## Debt Tools
+    | Parameter | Type | Default | Description |
+    |-----------|------|---------|-------------|
+    | `user_id` | str | — | Authenticated user |
+    | `days` | int | 30 | Lookback window |
+    | `category` | str | `""` | Filter to one category |
+    | `limit` | int | 50 | Max rows returned |
 
-| Tool | Description |
-|------|-------------|
-| `get_debt_summary` | What you owe vs what's owed to you — net position. |
-| `get_loan_details` | Loan accounts with outstanding balance, APR, payment schedule. |
-| `get_cc_utilization` | Credit card balance vs limit, per-card and total utilisation %. |
-| `simulate_payoff` | Amortisation-based payoff timeline. Compares current schedule vs with extra payments. |
-| `get_social_debts` | Interpersonal debts (group or standalone). |
-| `get_settlement_history` | Recently settled debts. |
+    **Returns:** Total spend + breakdown by category as formatted text.
+
+    **Example Q:** *"How much did I spend on food last month?"*
+    > Fetches 30 days of transactions filtered to category `Food`. Returns total + individual transactions.
+  </Accordion>
+
+  <Accordion title="get_budgets" icon="chart-pie">
+    Fetches active budgets with month-to-date spend progress.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** Per-budget status: `OK` (< 80%), `WARNING` (80–100%), `EXCEEDED` (> 100%).
+
+    **Example Q:** *"Which budgets am I close to hitting?"*
+    > Returns all budgets with utilisation %. Flags any above 80%.
+  </Accordion>
+
+  <Accordion title="scan_subscriptions" icon="rotate">
+    Detects recurring merchant charges from the last 90 days. Groups by merchant + amount, flags any with 2+ occurrences.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** List of `{merchant, amount, occurrences, last_charge}`.
+
+    **Example Q:** *"What subscriptions am I paying for?"*
+    > Returns Netflix $15.98 ×3, Spotify $9.90 ×3, iCloud $3.99 ×3, etc.
+  </Accordion>
+
+  <Accordion title="project_budget" icon="chart-line">
+    Projects month-end spending based on current daily burn rate.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** Per-category `{budget, spent, projected, on_track}`.
+
+    **Example Q:** *"Will I go over my food budget this month?"*
+    > Calculates daily spend rate, projects to month end, compares against budget limit.
+  </Accordion>
+</AccordionGroup>
+
+**Example questions handled by Cash Flow tools:**
+- "How much did I spend on transport this week?"
+- "Show me my top 5 merchants this month"
+- "Compare my spending in February vs March"
+- "What's my average monthly spend on groceries?"
+- "Am I on track with my budgets?"
+
+---
 
 ## Investment Tools
 
-| Tool | Description |
-|------|-------------|
-| `get_holdings` | All portfolio positions with cost basis. Filter by asset type. |
-| `get_portfolio_summary` | Total value, cost basis, total return %, allocation by type. |
-| `get_asset_detail` | Single holding: quantity, cost, current price, P&L, daily change. |
-| `get_market_price` | Live prices for multiple symbols (stocks, crypto, ETFs). |
-| `get_historical_prices` | OHLCV data for any period (1d to max). |
-| `get_allocation_breakdown` | Portfolio breakdown by asset type or currency with percentages. |
-| `get_portfolio_performance` | Per-holding and total return analysis. |
-| `get_concentration_risk` | Top holdings %, HHI diversification index, risk assessment. |
+<AccordionGroup>
+  <Accordion title="get_portfolio" icon="chart-line">
+    Fetches and summarises all investment holdings.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** Total portfolio value + breakdown by asset type (stocks, crypto, ETFs, etc.) with cost basis and current value.
+
+    **Example Q:** *"What's my portfolio worth?"*
+    > Returns total market value, total cost basis, overall return %, allocation by asset type.
+  </Accordion>
+
+  <Accordion title="get_live_price / fetch_stock_price" icon="dollar-sign">
+    Fetches live market prices via yfinance (stocks/ETFs) or CoinGecko (crypto).
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `symbol` | str | Ticker (e.g. `AAPL`, `BTC`, `ES3.SI`) |
+
+    **Returns:** `{symbol, price, change_pct}` with 24h change.
+
+    **Example Q:** *"What's Apple trading at?"*
+    > Calls yfinance for real-time AAPL price + daily change %.
+  </Accordion>
+
+  <Accordion title="get_historical_prices / fetch_price_history" icon="chart-candlestick">
+    OHLCV historical price data via yfinance.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `symbol` | str | Ticker symbol |
+    | `period` | str | `1w`, `1mo`, `3mo`, `6mo`, `1y`, `max` |
+
+    **Returns:** OHLCV series + period return %.
+
+    **Example Q:** *"How has Tesla performed over the last 6 months?"*
+    > Fetches 6-month OHLCV, calculates period return, returns sparkline data.
+  </Accordion>
+</AccordionGroup>
+
+**Example questions handled by Investment tools:**
+- "What's my best performing holding this month?"
+- "How diversified is my portfolio?"
+- "What's the P&L on my crypto positions?"
+- "Show me my allocation breakdown"
+- "Is MSFT up or down today?"
+
+---
+
+## Debt Tools
+
+<AccordionGroup>
+  <Accordion title="get_debts" icon="handshake">
+    Fetches interpersonal debts — what you owe friends and what they owe you.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** Net debt position + individual debt breakdown (creditor/debtor, amount, currency, status).
+
+    **Example Q:** *"Who owes me money?"*
+    > Lists all unsettled debts where user is creditor, with amounts and names.
+  </Accordion>
+</AccordionGroup>
+
+**Example questions handled by Debt tools:**
+- "What's my total credit card utilisation?"
+- "If I pay an extra $200/month towards my loan, when will I be debt-free?"
+- "How much do I owe across all my friends?"
+- "What's my debt-to-income ratio?"
+
+---
 
 ## Wealth Tools
 
-| Tool | Description |
-|------|-------------|
-| `get_net_worth` | Total assets minus liabilities. Includes live portfolio value. |
-| `get_account_balances` | All accounts grouped by type (checking, savings, credit card, loan). |
-| `get_net_worth_trend` | Monthly net worth over 6 months, including portfolio changes. |
-| `get_savings_rate` | Monthly savings rate % — (income - expenses) / income. |
-| `get_asset_liability_breakdown` | Detailed categorised list of all assets and liabilities. |
-| `get_financial_health_score` | 0-100 composite score: savings rate, debt ratio, emergency fund, diversification. |
-| `get_transfer_history` | Recent inter-account transfers. |
+<AccordionGroup>
+  <Accordion title="run_anomaly_detection" icon="triangle-exclamation">
+    Runs the full anomaly detection pipeline: z-score category analysis, duplicate charge detection, and budget threshold checks.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `user_id` | str | Authenticated user |
+
+    **Returns:** List of `{type, severity, message, metadata}` alerts.
+
+    Alert types: `high_spend`, `duplicate`, `budget_warning`, `budget_exceeded`.
+
+    **Example Q:** *"Are there any unusual charges on my account?"*
+    > Runs z-score analysis on last 90 days. Returns any categories >2σ above weekly mean + duplicate charge pairs.
+  </Accordion>
+</AccordionGroup>
+
+**Example questions handled by Wealth tools:**
+- "What's my current net worth?"
+- "How has my net worth changed over the last 6 months?"
+- "What's my savings rate this year?"
+- "Show me my assets vs liabilities"
+- "Any suspicious charges this month?"
+
+---
 
 ## Market Tools
 
-| Tool | Description |
-|------|-------------|
-| `get_live_price` | Current price, daily change %, market cap. |
-| `get_price_history` | OHLCV historical data with period return. |
-| `get_forex_rate` | Currency conversion rates (USD→SGD, INR→USD, etc.) |
-| `compare_assets` | Side-by-side performance: period return, volatility, ranking. |
+<AccordionGroup>
+  <Accordion title="fetch_stock_price" icon="arrow-trend-up">
+    Single stock/ETF price with daily change via yfinance. Cached with 60-second TTL.
 
-## Shared Tools
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `symbol` | str | Yahoo Finance ticker (e.g. `AAPL`, `ES3.SI`, `BTC-USD`) |
 
-| Tool | Description |
-|------|-------------|
-| `search_context` | Keyword search across transactions, accounts, holdings (RAG preparation). |
-| `get_user_profile` | Account overview, currencies, holdings count, active budgets. |
+    **Returns:** `{symbol, price, change_pct}`.
+  </Accordion>
+
+  <Accordion title="fetch_crypto_price" icon="bitcoin">
+    Single crypto price from CoinGecko API. Cached with 60-second TTL.
+
+    | Parameter | Type | Description |
+    |-----------|------|-------------|
+    | `coin_id` | str | CoinGecko ID (e.g. `bitcoin`, `ethereum`, `solana`) |
+
+    **Returns:** `{id, price_usd, change_24h}`.
+  </Accordion>
+</AccordionGroup>
+
+**Example questions handled by Market tools:**
+- "What's Bitcoin trading at?"
+- "How did the S&P 500 do today?"
+- "Compare AAPL vs MSFT performance this year"
+- "What's the SGD/USD rate?"
+
+---
+
+## How tools are called
+
+When you ask a question, the specialist (Claude Sonnet) receives your question, conversation history, and the full list of tools for your domain. It decides which tools to call — often multiple in parallel:
+
+```
+You: "How much did I spend on food vs my budget, and are there any subscriptions I forgot about?"
+
+Claude calls simultaneously:
+  → query_transactions(days=30, category="Food")
+  → get_budgets()
+  → scan_subscriptions()
+
+All three results return → Claude synthesises into one answer
+```
+
+The Flutter chat UI shows each tool call as it fires: **"Analyzing food transactions... Checking budgets... Scanning for subscriptions..."**
