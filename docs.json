@@ -1,20 +1,23 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "luma",
+  "theme": "palm",
   "name": "Vantage Wealth",
   "colors": {
     "primary": "#10B981",
     "light": "#34D399",
-    "dark": "#059669",
-    "ultraLight": "#F1F5F9",
-    "ultraDark": "#0A0B0E",
-    "background": {
+    "dark": "#059669"
+  },
+  "appearance": {
+    "default": "dark"
+  },
+  "background": {
+    "color": {
       "light": "#F1F5F9",
       "dark": "#0A0B0E"
     }
   },
-  "modeToggle": {
-    "default": "dark"
+  "fonts": {
+    "family": "Inter"
   },
   "favicon": "/favicon.svg",
   "logo": {
@@ -24,7 +27,7 @@
   "navbar": {
     "links": [
       {
-        "label": "GitHub",
+        "type": "github",
         "href": "https://github.com/rmurarishetti/vantage"
       }
     ],
