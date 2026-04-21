@@ -1,0 +1,71 @@
+---
+title: "AI Tools Reference"
+description: "All 35 deterministic tools available to the AI advisor."
+---
+
+The AI advisor uses deterministic tools to fetch your real data. No numbers are made up — every answer is sourced from one of these tools.
+
+## Cash Flow Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_spending_by_category` | Total spend per category for a date range. Optional category filter. |
+| `get_spending_by_merchant` | Top merchants ranked by spend, with transaction count. |
+| `get_spending_trend` | Monthly spend trajectory over 6+ months. |
+| `get_transactions` | Individual transactions with filters (category, merchant, amount range, date). |
+| `get_budget_status` | Budget vs actual comparison with % used alerts. |
+| `get_recurring_transactions` | Detects subscriptions from 90-day patterns. Returns merchant, estimated monthly cost. |
+| `compare_spending_periods` | Side-by-side category comparison between two date ranges. |
+| `get_income_summary` | Income totals grouped by source/merchant. |
+
+## Debt Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_debt_summary` | What you owe vs what's owed to you — net position. |
+| `get_loan_details` | Loan accounts with outstanding balance, APR, payment schedule. |
+| `get_cc_utilization` | Credit card balance vs limit, per-card and total utilisation %. |
+| `simulate_payoff` | Amortisation-based payoff timeline. Compares current schedule vs with extra payments. |
+| `get_social_debts` | Interpersonal debts (group or standalone). |
+| `get_settlement_history` | Recently settled debts. |
+
+## Investment Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_holdings` | All portfolio positions with cost basis. Filter by asset type. |
+| `get_portfolio_summary` | Total value, cost basis, total return %, allocation by type. |
+| `get_asset_detail` | Single holding: quantity, cost, current price, P&L, daily change. |
+| `get_market_price` | Live prices for multiple symbols (stocks, crypto, ETFs). |
+| `get_historical_prices` | OHLCV data for any period (1d to max). |
+| `get_allocation_breakdown` | Portfolio breakdown by asset type or currency with percentages. |
+| `get_portfolio_performance` | Per-holding and total return analysis. |
+| `get_concentration_risk` | Top holdings %, HHI diversification index, risk assessment. |
+
+## Wealth Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_net_worth` | Total assets minus liabilities. Includes live portfolio value. |
+| `get_account_balances` | All accounts grouped by type (checking, savings, credit card, loan). |
+| `get_net_worth_trend` | Monthly net worth over 6 months, including portfolio changes. |
+| `get_savings_rate` | Monthly savings rate % — (income - expenses) / income. |
+| `get_asset_liability_breakdown` | Detailed categorised list of all assets and liabilities. |
+| `get_financial_health_score` | 0-100 composite score: savings rate, debt ratio, emergency fund, diversification. |
+| `get_transfer_history` | Recent inter-account transfers. |
+
+## Market Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_live_price` | Current price, daily change %, market cap. |
+| `get_price_history` | OHLCV historical data with period return. |
+| `get_forex_rate` | Currency conversion rates (USD→SGD, INR→USD, etc.) |
+| `compare_assets` | Side-by-side performance: period return, volatility, ranking. |
+
+## Shared Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_context` | Keyword search across transactions, accounts, holdings (RAG preparation). |
+| `get_user_profile` | Account overview, currencies, holdings count, active budgets. |

@@ -1,0 +1,37 @@
+---
+title: "Android Home Screen Widgets"
+description: "Three live widgets that show your finances directly on the home screen."
+---
+
+## Available widgets
+
+Add any of these to your Android home screen by long-pressing → Widgets → Vantage Wealth.
+
+### Net Worth widget
+Shows your current net worth with a mini sparkline for the 6-month trend. Updates every time you open the app.
+
+### This Month's Spend widget
+Shows total spend for the current month vs your total budget (if set). Colour-coded: mint green = within budget, amber = approaching limit.
+
+### Recent Transactions widget
+Lists your last 5 transactions with merchant name, amount, and category icon. Tap any transaction to open it in the app.
+
+---
+
+## How widgets update
+
+Widgets are updated by the Flutter app using `home_widget`. The app:
+1. Renders chart data as bitmaps (using Flutter's canvas)
+2. Writes the bitmaps and data to SharedPreferences
+3. Calls `HomeWidget.updateWidget()` to trigger an Android widget refresh
+
+This happens automatically on every app launch, resume, and significant data change.
+
+---
+
+## Technical notes
+
+- All widget layouts use `RemoteViews` compatible views (no custom `View` subclasses — Android 15 restriction)
+- Chart images are pre-rendered as bitmaps by Flutter and set via `setImageViewBitmap`
+- Widget data is stored in SharedPreferences, keyed by user ID
+- Tapping a widget deep-links into the relevant screen in the app

@@ -1,0 +1,63 @@
+---
+title: "Android Device Setup"
+description: "Configure your Android device for notification capture and app sideloading."
+---
+
+## Enable USB debugging
+
+1. Go to **Settings → About phone**
+2. Tap **Build number** 7 times to unlock Developer Options
+3. Go to **Settings → System → Developer Options**
+4. Enable **USB debugging**
+
+---
+
+## Grant notification access
+
+Vantage requires notification access to capture banking transactions.
+
+1. Go to **Settings → Apps → Special app access → Notification access** (or search "Notification access" in settings)
+2. Find **Vantage Wealth** and enable it
+
+<Warning>
+  Without notification access, automatic transaction capture will not work. You can still use Vantage manually, but notifications won't be processed.
+</Warning>
+
+---
+
+## Install the APK
+
+```bash
+adb devices   # verify your device is connected
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+If `adb` is not found, add the Android SDK platform-tools to your PATH:
+
+```bash
+export PATH="$PATH:$HOME/Library/Android/sdk/platform-tools"   # macOS
+```
+
+---
+
+## Supported Android versions
+
+| Android version | API level | Status |
+|----------------|-----------|--------|
+| Android 10 | 29 | Minimum supported |
+| Android 11–14 | 30–34 | Fully supported |
+| Android 15 | 35 | Fully supported (tested on Pixel) |
+
+---
+
+## Permissions required
+
+| Permission | Purpose |
+|-----------|---------|
+| `NOTIFICATION_LISTENER` | Capture banking notifications |
+| `INTERNET` | Connect to Supabase and backend |
+| `USE_BIOMETRIC` | Biometric lock screen |
+| `CAMERA` | OCR receipt scanning |
+| `POST_NOTIFICATIONS` | Local notification alerts |
+| `RECEIVE_BOOT_COMPLETED` | Restart notification listener after reboot |
+| `SCHEDULE_EXACT_ALARM` | Scheduled budget alerts |

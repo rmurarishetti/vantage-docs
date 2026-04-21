@@ -1,0 +1,108 @@
+---
+title: "Adding Tools"
+description: "How to add a new deterministic tool for the AI advisor."
+---
+
+## Overview
+
+Every tool is a Python async function decorated with `@tool`. The decorator auto-generates the Claude API tool schema from the function signature and docstring.
+
+---
+
+## Step 1: Choose the right file
+
+| Domain | File |
+|--------|------|
+| Spending, income, budgets | `backend/tools/cashflow_tools.py` |
+| Portfolio, holdings, prices | `backend/tools/investment_tools.py` |
+| Credit cards, loans, debts | `backend/tools/debt_tools.py` |
+| Net worth, accounts, health | `backend/tools/wealth_tools.py` |
+| Live prices, forex | `backend/tools/market_tools_v2.py` |
+| Cross-domain / utility | `backend/tools/shared_tools.py` |
+
+---
+
+## Step 2: Write the tool
+
+```python
+from tools.base import tool
+from services.supabase_client import get_supabase
+
+@tool
+async def get_coffee_spend(
+    user_id: str,
+    months: int = 3,
+) -> dict:
+    """
+    Returns the user's total spend at coffee shops over the last N months.
+
+    Args:
+        user_id: The authenticated user's UUID.
+        months: Number of months to look back (default 3).
+
+    Returns:
+        total: Total amount spent (SGD).
+        top_merchants: List of top coffee merchants with amounts.
+    """
+    supabase = get_supabase()
+    cutoff = (datetime.now() - timedelta(days=months * 30)).isoformat()
+
+    rows = supabase.table("transactions") \
+        .select("amount, merchant") \
+        .eq("user_id", user_id) \
+        .eq("category", "Coffee & Beverages") \
+        .gte("created_at", cutoff) \
+        .execute()
+
+    total = sum(r["amount"] for r in rows.data)
+    # ... aggregate by merchant
+    return {"total": total, "top_merchants": merchants}
+```
+
+**Rules:**
+- Always scope queries to `user_id` — never fetch data without it
+- Return a `dict` — Claude will receive it as JSON
+- No `default` values in the function signature for required parameters (causes schema issues)
+- Keep tool names snake_case and globally unique
+
+---
+
+## Step 3: Register the tool
+
+In the relevant domain specialist file (`backend/orchestrator/specialist.py`), add your tool to the domain's tool list:
+
+```python
+from tools.cashflow_tools import get_coffee_spend  # example
+
+CASHFLOW_TOOLS = [
+    ...,
+    get_coffee_spend,
+]
+```
+
+---
+
+## Step 4: Add a loading label (Flutter)
+
+In `lib/features/ai_agent/providers/chat_provider.dart`, add your tool name to the `_toolLabels` map:
+
+```dart
+'get_coffee_spend': 'Checking coffee spending',
+```
+
+---
+
+## Step 5: Test
+
+```bash
+cd backend
+TEST_USER_ID=your-user-id venv/bin/python test_rag_pipeline.py
+```
+
+Or call the endpoint directly:
+
+```bash
+curl -X POST http://localhost:8000/ai/ask \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "your-id", "message": "How much do I spend on coffee?"}'
+```

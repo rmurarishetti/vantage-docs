@@ -1,0 +1,74 @@
+---
+title: "Flutter App Setup"
+description: "Configure and build the Flutter app for your Android device."
+---
+
+## Environment configuration
+
+Vantage uses `--dart-define-from-file` to inject credentials at build time. Your real keys stay out of source control.
+
+```bash
+cd vantage_wealth
+cp .env.example.json .env.json
+```
+
+Edit `.env.json`:
+
+```json
+{
+  "SUPABASE_URL": "https://your-project.supabase.co",
+  "SUPABASE_ANON_KEY": "your-anon-key",
+  "API_BASE_URL": "http://your-backend-url:8000"
+}
+```
+
+**API_BASE_URL values:**
+
+| Device | Value |
+|--------|-------|
+| Android emulator | `http://10.0.2.2:8000` |
+| Physical device (USB/WiFi) | `http://192.168.x.x:8000` (your machine's LAN IP) |
+| VPN/Tailscale | `http://100.x.x.x:8000` |
+| Production | `https://api.yourdomain.com` |
+
+---
+
+## Run in development
+
+```bash
+flutter pub get
+flutter run --dart-define-from-file=.env.json
+```
+
+---
+
+## Build release APK
+
+```bash
+flutter build apk --release --dart-define-from-file=.env.json
+```
+
+Install on your device:
+
+```bash
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+---
+
+## Code generation
+
+If you modify any `@freezed` models or add Riverpod providers with `@riverpod`:
+
+```bash
+dart run build_runner build --delete-conflicting-outputs
+```
+
+---
+
+## Run analysis
+
+```bash
+flutter analyze   # must return 0 errors
+flutter test      # run unit + widget tests
+```

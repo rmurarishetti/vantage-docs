@@ -1,0 +1,154 @@
+---
+title: "Supported Banks & Apps"
+description: "All banking and payment apps that Vantage can automatically parse."
+---
+
+## Singapore
+
+<AccordionGroup>
+  <Accordion title="DBS Bank" icon="building-columns">
+    **Package:** `com.dbs.sg.dbsmbanking`
+    **Currency:** SGD
+
+    Supported notification formats:
+    ```
+    SGD 45.50 spent on Grab at 3:15 PM. Card ending 1234
+    Card ending 1234: SGD 150.00 at FairPrice
+    You spent SGD 32.00 at NTUC. DBS Visa ending 9012
+    You have made a transaction of SGD 42.50 at GRAB FOOD with card ending 1234
+    ```
+  </Accordion>
+
+  <Accordion title="HSBC Singapore" icon="building-columns">
+    **Packages:** `sg.com.hsbc.hsbcsingapore` / `com.hsbc.hsbcsg` (legacy)
+    **Currency:** SGD
+
+    Supported notification formats:
+    ```
+    Purchase at SANKRANTI - BIOPOLIS on ** 8692 for SGD10.90
+    Payment of SGD 500.00 received
+    Card transaction: SGD 88.00 at Uniqlo
+    HSBC Card ending 7890: SGD 200.00 spent at Apple Store
+    You made a purchase of SGD 45.00 at Don Don Donki
+    ```
+  </Accordion>
+
+  <Accordion title="UOB" icon="building-columns">
+    **Packages:** `com.uob.mighty` / `com.uob.mighty.app`
+    **Currency:** SGD
+
+    Supported notification formats:
+    ```
+    A transaction of SGD 12.00 was made with your UOB Card ending 0161 on 17/03/26 at FUSION HUB
+    UOB Card ending 5678: SGD 25.30 at Starbucks
+    SGD 150.00 spent on UOB Card ending 5678 at Courts
+    Transaction of SGD 33.50 at Daiso. UOB Card ending 5678
+    ```
+  </Accordion>
+
+  <Accordion title="Citi Singapore" icon="building-columns">
+    **Package:** `com.citibank.mobile.sg` / `com.citibank.mobile.sgipb` (IPB)
+    **Currency:** SGD
+
+    Supported notification formats:
+    ```
+    There was a charge of SGD2.16 on your Card ending 3990 by ShopBack on 19/03/26
+    Transaction alert: SGD 120.00 at Cold Storage
+    Card ending 4321: SGD 89.90 charged at Guardian
+    SGD 55.00 was charged to your Citi card at Watsons
+    ```
+  </Accordion>
+
+  <Accordion title="Google Wallet" icon="wallet">
+    **Package:** `com.google.android.apps.walletnfcrel`
+    **Currency:** SGD
+
+    Captures tap-to-pay NFC transactions. Merchant name is in the notification title, amount in the body:
+    ```
+    Title: Starbucks
+    Body:  $10.90 with Visa ··8692
+    ```
+    ```
+    Title: NTUC FairPrice
+    Body:  SGD 43.20 with Mastercard ··1234
+    ```
+  </Accordion>
+
+  <Accordion title="Moomoo" icon="chart-candlestick">
+    **Package:** `com.futu.moomoo`
+    **Currency:** USD
+
+    Captures US equity trades:
+    ```
+    Order filled: Buy 5 AAPL at $185.20
+    Bought 10 TSLA @ $240.50. Order ID: 12345
+    Your Buy order for 3 MSFT has been filled at $380.00
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## India
+
+<AccordionGroup>
+  <Accordion title="Citi India" icon="building-columns">
+    **Package:** `com.citi.citimobile`
+    **Currency:** INR
+
+    Supported notification formats:
+    ```
+    INR 2,500.00 debited from your Citi Card ending 1234 at Amazon
+    Your Citi Card ending 1234 has been charged INR 850 at Swiggy
+    INR 1,200 at Zomato on your Citi Card
+    ```
+  </Accordion>
+
+  <Accordion title="Axis Bank" icon="building-columns">
+    **Package:** `com.axis.mobile`
+    **Currency:** INR
+
+    Supported notification formats:
+    ```
+    INR 2,500 debited from A/c XX1234 to Amazon
+    Rs 1,200.50 spent at Flipkart on Axis Card ending 9876
+    Axis Bank: ₹500 paid to Zomato via UPI
+    ```
+  </Accordion>
+
+  <Accordion title="PhonePe (UPI)" icon="mobile">
+    **Package:** `com.phonepe.app`
+    **Currency:** INR
+
+    Supported notification formats:
+    ```
+    Paid ₹450 to Swiggy via UPI
+    ₹1,200 sent to Rahul Kumar. UPI Ref: 123456
+    Payment of ₹350.00 to BigBasket successful
+    ```
+  </Accordion>
+
+  <Accordion title="Zerodha Kite" icon="chart-candlestick">
+    **Package:** `com.zerodha.kite`
+    **Currency:** INR
+
+    Captures NSE/BSE trades:
+    ```
+    Order executed: Buy 10 RELIANCE at ₹2,450.00
+    Buy order for 5 TCS executed at ₹3,500
+    Trade: Sold 20 INFY @ ₹1,800.50
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Adding a new bank
+
+Want your bank supported? The parser is designed to be extended. Each bank needs:
+
+1. Its Android package name (found via `adb logcat` or the Play Store URL)
+2. A set of `RegExp` patterns matching its notification formats
+3. A PR to `vantage_wealth/lib/core/utils/notification_parser.dart` and `VantageNotificationListener.kt`
+
+See [CONTRIBUTING.md](https://github.com/rmurarishetti/vantage/blob/main/CONTRIBUTING.md#adding-a-new-banking-app) for the full guide with code examples.

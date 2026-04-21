@@ -1,0 +1,106 @@
+---
+title: "AI Architecture"
+description: "How the AI advisor routes, reasons, and responds."
+---
+
+## Request flow
+
+```
+Flutter app sends message
+  ↓
+POST /ai/ask  (SSE streaming endpoint)
+  ↓
+┌─────────────────────────────────────────┐
+│ Two-tier intent router                  │
+│                                         │
+│  1. Regex classifier                    │
+│     ~70% of queries matched instantly   │
+│     patterns per domain (no LLM call)  │
+│                                         │
+│  2. Claude Haiku fallback               │
+│     for ambiguous/multi-domain queries  │
+└─────────────────────────────────────────┘
+  ↓
+Domain: cashflow | investment | debt | wealth | market
+  ↓
+┌─────────────────────────────────────────┐
+│ Specialist (Claude Sonnet)              │
+│                                         │
+│ Tool-use loop:                          │
+│  1. Claude decides which tools to call  │
+│  2. Tools execute (parallel where safe) │
+│  3. Results appended to messages        │
+│  4. Loop until no more tool calls       │
+│  5. Stream final response               │
+└─────────────────────────────────────────┘
+  ↓
+SSE stream: phase events, tool events, tokens, done
+  ↓
+Flutter chat UI (real-time rendering)
+```
+
+---
+
+## SSE event types
+
+The backend streams Server-Sent Events. Flutter reacts to each:
+
+| Event | Payload | UI effect |
+|-------|---------|----------|
+| `phase` | `thinking` / `generating` | Loading indicator phase |
+| `tool` | `{name, status: "calling"}` | "Analyzing spending by category..." |
+| `token` | `{text}` | Streaming text appended to bubble |
+| `done` | `{text, widgets, suggestions, tools_used, agent_used}` | Finalise message |
+| `error` | `{text}` | Error message shown |
+
+---
+
+## Intent routing
+
+The regex classifier uses domain-specific keyword patterns:
+
+```python
+CASHFLOW_PATTERNS = [
+    r'\b(spend|spent|spending|expense|expenses|budget|transaction)\b',
+    r'\b(category|categories|merchant|food|transport|groceries)\b',
+    r'\b(income|salary|monthly|weekly|this month|last month)\b',
+]
+
+INVESTMENT_PATTERNS = [
+    r'\b(stock|portfolio|holding|crypto|bitcoin|etf|market)\b',
+    r'\b(gain|loss|return|p&l|price|allocation|dividend)\b',
+]
+# ... etc for debt, wealth, market
+```
+
+If a query matches multiple domains, Haiku classifies with a one-shot prompt that returns a domain label in JSON.
+
+---
+
+## Tool-use loop
+
+The specialist runs Claude Sonnet with all domain tools registered. Claude decides which tools to call based on the question:
+
+```python
+while True:
+    response = claude.messages.create(
+        model="claude-sonnet-4-5",
+        tools=domain_tools,
+        messages=messages,
+    )
+    if response.stop_reason == "end_turn":
+        break
+    # execute tool calls, append results, loop
+    tool_results = await execute_tools(response.content)
+    messages.extend(tool_results)
+```
+
+Tools that fetch independent data (e.g. `get_spending_by_category` + `get_budget_status`) run in parallel using `asyncio.gather`.
+
+---
+
+## Conversation history
+
+The Flutter app sends the last 10 messages (5 exchanges) as context with each request. The backend converts Flutter's `{text, isUser}` format to Claude's `{role, content}` format.
+
+Conversation history is also persisted to Supabase (`ai_conversations` table) so context survives app restarts.

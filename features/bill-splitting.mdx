@@ -1,0 +1,44 @@
+---
+title: "Bill Splitting"
+description: "Three modes for splitting expenses with friends and groups."
+---
+
+## Modes
+
+### Equal split
+The simplest mode. Enter the total, choose how many people, and Vantage divides it equally. Handles rounding automatically.
+
+### Itemized split
+Per-item assignment with shared costs:
+1. Add items with prices
+2. Assign each item to one or more people
+3. Add shared tax % and service charge %
+4. Vantage computes each person's exact share
+
+### Smart split (OCR)
+Point your camera at a receipt and Vantage:
+1. Uses Google ML Kit (on-device OCR) to extract the text
+2. Sends it to Claude Haiku to parse items, prices, tax, and service charge
+3. Pre-fills the itemized split form automatically
+
+Works with most printed restaurant receipts.
+
+---
+
+## Groups
+
+Create groups for recurring bill splits (e.g. housemates, regular dinner friends). Groups maintain running tallies of who owes whom, with a **simplify debts** algorithm that minimises the number of transactions needed to settle.
+
+Example: 3 people, multiple shared bills → Vantage tells you the minimum payment graph (A pays B $12, B pays C $8) instead of tracking each bill separately.
+
+---
+
+## Settlement
+
+Mark debts as settled via:
+- **PayNow** (Singapore) — show QR code
+- **UPI** (India) — show UPI ID
+- **Cash** — manual confirmation
+- **Bank transfer** — record reference
+
+Settled debts are archived with a history log.

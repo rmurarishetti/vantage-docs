@@ -1,0 +1,55 @@
+---
+title: "Docker (Embedding Server)"
+description: "Run the embedding server for AI memory using Docker."
+---
+
+## Why Docker?
+
+The RAG pipeline uses **BAAI/bge-small-en-v1.5** to embed financial summaries into vectors. This model runs in a lightweight Docker container so you don't need to install PyTorch on the main server.
+
+---
+
+## Start the embedding server
+
+```bash
+cd backend/docker
+docker compose up -d
+```
+
+This starts a FastAPI server on port 8001 that exposes:
+
+```
+POST /embed
+Body: {"texts": ["Daily summary for April 18..."]}
+Response: {"embeddings": [[0.12, -0.34, ...], ...]}
+```
+
+---
+
+## Verify it's running
+
+```bash
+curl -X POST http://localhost:8001/embed \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["test"]}'
+```
+
+Should return a 384-dimensional float array.
+
+---
+
+## Memory requirements
+
+| Model | Memory |
+|-------|--------|
+| BAAI/bge-small-en-v1.5 | ~180 MB RAM |
+| Docker overhead | ~100 MB |
+| **Total** | **~280 MB** |
+
+A t3.small (2 GB RAM) can comfortably run both the FastAPI backend and the embedding server.
+
+---
+
+## Without Docker
+
+If you can't run Docker, RAG ingestion will fall back to a no-op and the AI advisor will work without memory context. All other features work normally.

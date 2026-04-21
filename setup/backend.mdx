@@ -1,0 +1,63 @@
+---
+title: "Backend Setup"
+description: "Run the FastAPI backend locally or deploy to a server."
+---
+
+## Local development
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Edit `backend/.env`:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key
+ANTHROPIC_API_KEY=sk-ant-...
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json  # optional, for FCM
+```
+
+Start the server:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+Available endpoints after startup:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Health check |
+| `POST /ai/ask` | AI advisor (SSE streaming) |
+| `GET /market/price` | Live stock/crypto prices |
+| `POST /rag/ingest?user_id=...` | Manually trigger RAG ingestion |
+| `GET /transactions/` | Transaction CRUD |
+| `GET /holdings/` | Holdings CRUD |
+| `GET /accounts/` | Accounts CRUD |
+
+---
+
+## RAG ingestion
+
+The backend runs APScheduler cron jobs to embed your financial data for the AI memory:
+
+| Schedule | What runs |
+|----------|----------|
+| Daily at 2 AM | Yesterday's spending summary |
+| Sunday at 3 AM | Weekly pattern summary |
+| 1st of month at 4 AM | Monthly review |
+
+For local development, trigger ingestion manually:
+
+```bash
+curl -X POST "http://localhost:8000/rag/ingest?user_id=your-user-id"
+```
+
+<Note>
+  The embedding server (Docker) must be running for RAG ingestion to work. See [Docker setup](/self-hosting/docker).
+</Note>

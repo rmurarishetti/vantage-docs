@@ -1,0 +1,55 @@
+---
+title: "Portfolio Tracker"
+description: "Track stocks, crypto, ETFs, and other assets with live market prices."
+---
+
+## Asset types supported
+
+| Type | Examples | Price source |
+|------|---------|-------------|
+| Stock | AAPL, MSFT, RELIANCE.NS | Yahoo Finance (yfinance) |
+| Crypto | BTC, ETH, SOL | CoinGecko |
+| ETF | SPY, QQQ, CSPX.L | Yahoo Finance |
+| Bond | — | Manual |
+| REIT | CICT.SI, PLD | Yahoo Finance |
+| Commodity | GLD, SLV | Yahoo Finance |
+
+---
+
+## Features
+
+**Portfolio overview**
+- Total market value in your preferred currency (SGD, INR, USD)
+- Total cost basis and overall return %
+- Visual heatmap — green = gains, red = losses, sized by allocation
+
+**Per-holding detail**
+- Current price with daily change
+- Cost basis vs current value
+- P&L in absolute and percentage terms
+- Historical price chart with period selector: 1W / 1M / 3M / 6M / 1Y / ALL
+- Allocation % within your portfolio
+
+**Analytics**
+- Allocation breakdown by asset type and currency
+- Concentration risk — HHI index, top holdings %
+- Diversification score
+
+---
+
+## Multi-currency
+
+Holdings can be denominated in any currency. The portfolio converts everything to your preferred display currency using live exchange rates. For example, a USD stock holding is shown in SGD equivalent using the current USD/SGD rate.
+
+Crypto assets always use USD as the base and then convert.
+
+---
+
+## Live prices
+
+Prices are fetched from the FastAPI backend on demand:
+- Stocks and ETFs → Yahoo Finance via `yfinance`
+- Crypto → CoinGecko public API
+- Exchange rates → Yahoo Finance
+
+Prices are TTL-cached for 60 seconds in the backend to avoid rate limits.

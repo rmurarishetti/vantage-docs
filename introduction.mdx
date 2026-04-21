@@ -1,0 +1,61 @@
+---
+title: "Introduction"
+description: "Vantage Wealth — the open-source personal finance command center for Singapore and India."
+---
+
+## What is Vantage?
+
+Vantage Wealth is a personal finance super app that unifies everything about your money into one place:
+
+<CardGroup cols={2}>
+  <Card title="Automated Expense Tracking" icon="bell" href="/features/expense-tracking">
+    Captures transactions from banking notifications automatically. No bank API, no manual entry.
+  </Card>
+  <Card title="AI Financial Advisor" icon="robot" href="/features/ai-advisor">
+    Ask natural-language questions about your spending, portfolio, debts, and net worth.
+  </Card>
+  <Card title="Portfolio Tracker" icon="chart-line" href="/features/portfolio">
+    Live prices for stocks, crypto, and ETFs. P&L, allocation, and historical charts.
+  </Card>
+  <Card title="Bill Splitting" icon="users" href="/features/bill-splitting">
+    Equal, itemized, or OCR-smart splits. Group management with settlement tracking.
+  </Card>
+</CardGroup>
+
+## How it works
+
+Vantage runs on your Android device and connects to three services you control:
+
+```
+Your Android phone
+  └── Banking notifications → VantageNotificationListener (native Kotlin)
+                           → Parsed transactions → Supabase (your database)
+
+FastAPI backend (self-hosted)
+  └── AI advisor → Claude API (Anthropic)
+  └── Market data → yfinance + CoinGecko
+
+Flutter app
+  └── Reads from Supabase
+  └── Queries FastAPI for AI + prices
+```
+
+**No third-party financial data brokers.** Your data lives in your own Supabase project.
+
+## Supported regions
+
+| Region | Banks | Payment Apps | Brokerages |
+|--------|-------|-------------|------------|
+| 🇸🇬 Singapore | DBS, HSBC, UOB, Citi | Google Wallet | Moomoo |
+| 🇮🇳 India | Citi, Axis Bank | PhonePe (UPI) | Zerodha Kite |
+
+## What you need
+
+- An Android device (API 29 / Android 10+)
+- A [Supabase](https://supabase.com) account (free tier works)
+- An [Anthropic API key](https://console.anthropic.com) (for the AI advisor)
+- A server to run the FastAPI backend (or run it locally)
+
+<Card title="Ready? Start the quickstart →" icon="rocket" href="/quickstart">
+  Get from zero to a working app in 15 minutes.
+</Card>

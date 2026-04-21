@@ -1,0 +1,72 @@
+---
+title: "Supabase Setup"
+description: "Create your Supabase project and run the database migrations."
+---
+
+## Create a project
+
+1. Sign up at [supabase.com](https://supabase.com)
+2. Click **New Project** and choose a name (e.g. `vantage-wealth`)
+3. Pick a strong database password and save it — you'll need it for migrations
+4. Choose a region close to you
+
+From **Settings → API**, note:
+- **Project URL** — goes into `SUPABASE_URL`
+- **anon public key** — goes into `SUPABASE_ANON_KEY` (Flutter app)
+- **service_role key** — goes into `SUPABASE_SERVICE_KEY` (backend only, never expose publicly)
+
+---
+
+## Run migrations
+
+Install the Supabase CLI:
+
+```bash
+brew install supabase/tap/supabase   # macOS
+# or: npm install -g supabase
+```
+
+Link to your project and push all migrations:
+
+```bash
+supabase link --project-ref <your-project-ref>
+supabase db push
+```
+
+This runs all 12 migrations in order, creating:
+
+| Migration | What it creates |
+|-----------|----------------|
+| `001_initial_schema` | Core tables: users, accounts, transactions, holdings, budgets, debts, groups, bill_splits, user_insights, ai_conversations |
+| `002_seed_data` | Default spend categories and sample merchant mappings |
+| `003_accounts_advanced_features` | Statement day, payment day, credit limit fields |
+| `004_add_transfer_id` | Transfer linking for double-entry transactions |
+| `005_rag_embeddings` | pgvector extension, user_embeddings table, HNSW index, hybrid_search() RPC |
+| `006+` | Loan fields, APR, default account flag, insights constraints, newsletter, pgcron |
+
+---
+
+## Row Level Security
+
+All tables have RLS enabled. Every row is scoped to the authenticated user via `auth.uid()`. The backend uses the service role key (which bypasses RLS) only for admin operations like RAG ingestion.
+
+---
+
+## Enable Google OAuth (optional)
+
+1. Go to **Authentication → Providers → Google**
+2. Enable Google provider
+3. Add your Google OAuth client ID and secret (from [console.cloud.google.com](https://console.cloud.google.com))
+4. Add redirect URL: `com.vantagewealth.app://callback`
+
+---
+
+## pgvector (for AI memory)
+
+The RAG pipeline requires the `pgvector` extension. It's enabled automatically by migration `005`. Verify it's active:
+
+```sql
+select * from pg_extension where extname = 'vector';
+```
+
+If not present, enable it in Supabase → Database → Extensions → search "vector".

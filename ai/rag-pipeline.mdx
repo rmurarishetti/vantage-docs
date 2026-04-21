@@ -1,0 +1,66 @@
+---
+title: "RAG Pipeline"
+description: "How Vantage embeds your financial history for AI memory."
+---
+
+## Overview
+
+The RAG (Retrieval-Augmented Generation) pipeline gives the AI advisor memory across time. Without it, the AI only knows about your current transactions. With it, the AI can reference patterns from past months and previous conversations.
+
+---
+
+## Embeddings
+
+Vantage uses **BAAI/bge-small-en-v1.5** (384-dimensional dense embeddings) running in Docker:
+
+```bash
+# Start the embedding server
+docker compose -f backend/docker/docker-compose.yml up
+```
+
+The embedding server runs on `http://localhost:8001` and exposes a simple POST endpoint that returns float arrays.
+
+---
+
+## What gets embedded
+
+| Type | When | Content |
+|------|------|---------|
+| `daily_summary` | Daily at 2 AM | "Total spent: SGD 42.40 across 3 transactions. Food: $30, Transport: $4.40..." |
+| `weekly_summary` | Sunday 3 AM | "Weekly summary Apr 12–19: SGD 2,195 spent. Top: Education $1,618, Food $148..." |
+| `monthly_summary` | 1st of month 4 AM | Full month review with top merchants, budget adherence, savings rate |
+| `conversation_summary` | After each chat | "User asked: what's the HSBC balance? Response: S$436.39 outstanding..." |
+
+---
+
+## Hybrid search
+
+When the AI needs context, it uses a hybrid search combining:
+1. **Vector similarity** — semantic matching via pgvector cosine distance
+2. **Full-text search** — keyword matching via PostgreSQL `ilike`
+
+The `hybrid_search()` RPC function in Supabase combines both scores with a weighted average.
+
+---
+
+## Manual ingestion
+
+To ingest your data without waiting for the cron:
+
+```bash
+curl -X POST "http://localhost:8000/rag/ingest?user_id=your-user-id"
+```
+
+Check results in Supabase → `user_embeddings` table.
+
+---
+
+## Storage
+
+Embeddings are stored in the `user_embeddings` table with an HNSW index for fast approximate nearest-neighbour search:
+
+```sql
+CREATE INDEX ON user_embeddings
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
