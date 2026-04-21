@@ -96,6 +96,8 @@
             "group": "Architecture",
             "pages": [
               "ai/architecture",
+              "ai/agents",
+              "ai/streaming",
               "ai/rag-pipeline",
               "ai/adding-tools"
             ]

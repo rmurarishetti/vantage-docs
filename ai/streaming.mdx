@@ -1,0 +1,235 @@
+---
+title: "Streaming Protocol"
+description: "The SSE event format between the FastAPI backend and Flutter chat UI."
+---
+
+The AI advisor uses **Server-Sent Events (SSE)** for real-time streaming. Every `/ai/stream` request opens a persistent HTTP connection; the backend pushes events as they happen rather than waiting for a complete response.
+
+---
+
+## Event format
+
+Each event is a JSON object on a single line, prefixed with `data: ` and followed by a double newline:
+
+```
+data: {"event": "phase", "phase": "thinking"}\n\n
+data: {"event": "tool", "name": "query_transactions", "status": "calling"}\n\n
+data: {"event": "token", "text": "You spent "}\n\n
+data: {"event": "token", "text": "$420 on food "}\n\n
+data: {"event": "token", "text": "last month."}\n\n
+data: {"event": "done", "text": "You spent $420 on food last month.", "widgets": [], "suggestions": [], "agent_used": "cashflow", "tools_used": ["query_transactions"]}\n\n
+```
+
+The Flutter `AiService` parses each line, strips the `data: ` prefix, and decodes the JSON.
+
+---
+
+## Event types
+
+### `phase`
+
+Indicates which stage the pipeline is in. Flutter updates the loading indicator text.
+
+```json
+{ "event": "phase", "phase": "thinking" }
+{ "event": "phase", "phase": "tool_call" }
+{ "event": "phase", "phase": "generating" }
+```
+
+| Phase | UI label |
+|-------|----------|
+| `thinking` | "Thinking..." (animated dots) |
+| `tool_call` | "Analyzing..." (replaced by tool event label) |
+| `generating` | "Generating..." |
+
+### `tool`
+
+Fires when a tool call starts. Flutter shows a dismissible badge in the chat bubble.
+
+```json
+{ "event": "tool", "name": "query_transactions", "status": "calling" }
+{ "event": "tool", "name": "get_budgets", "status": "calling" }
+```
+
+The Flutter `_toolLabels` map in `chat_provider.dart` converts tool names to readable labels:
+
+```dart
+final _toolLabels = {
+    'query_transactions': 'Analyzing transactions',
+    'get_portfolio':      'Loading portfolio',
+    'get_budgets':        'Checking budgets',
+    'fetch_stock_price':  'Fetching live price',
+    'run_anomaly_detection': 'Scanning for anomalies',
+    'scan_subscriptions': 'Finding subscriptions',
+    // ...
+};
+```
+
+### `token`
+
+Incremental text from Claude's streaming output. Flutter appends each token to the current message bubble in real time.
+
+```json
+{ "event": "token", "text": "You spent " }
+{ "event": "token", "text": "$420 " }
+{ "event": "token", "text": "on food last month, " }
+```
+
+### `done`
+
+Final event. Contains the complete assembled text plus any widgets and follow-up suggestions.
+
+```json
+{
+  "event": "done",
+  "text": "You spent $420 on food last month, up 12% from $278 in February.",
+  "widgets": [
+    {
+      "type": "chart",
+      "chart_type": "bar",
+      "title": "Food spend — Feb vs Mar",
+      "data": { "labels": ["February", "March"], "values": [278, 420] }
+    }
+  ],
+  "suggestions": [
+    "What were my top food merchants?",
+    "Am I over my food budget?"
+  ],
+  "agent_used": "cashflow",
+  "tools_used": ["query_transactions", "get_budgets"]
+}
+```
+
+### `error`
+
+Replaces `done` if the pipeline fails. Flutter shows an error bubble with fallback suggestions.
+
+```json
+{
+  "event": "error",
+  "message": "I hit a snag processing your request. Please try again.",
+  "suggestions": [
+    "Try asking about my spending",
+    "How's my portfolio doing?"
+  ]
+}
+```
+
+---
+
+## Widget response schema
+
+When the answer is better expressed as a chart or card, Claude returns a structured widget object in the `done` event's `widgets` array. Flutter's `widget_renderer.dart` renders each widget natively.
+
+### Chart widget
+
+```json
+{
+  "type": "chart",
+  "chart_type": "bar | line | pie | sparkline",
+  "title": "Spending by Category — March",
+  "data": {
+    "labels": ["Food", "Transport", "Shopping"],
+    "values": [420, 180, 310]
+  }
+}
+```
+
+### Summary card
+
+```json
+{
+  "type": "card",
+  "title": "Net Worth",
+  "value": "S$15,270",
+  "delta": "+$420 this month",
+  "delta_positive": true
+}
+```
+
+### Alert card
+
+```json
+{
+  "type": "alert",
+  "severity": "warning | critical | info",
+  "title": "Budget exceeded",
+  "description": "Shopping budget is 116% used with 10 days left."
+}
+```
+
+### Multi-widget
+
+```json
+{
+  "type": "multi_widget",
+  "widgets": [
+    { "type": "card", ... },
+    { "type": "chart", ... }
+  ]
+}
+```
+
+---
+
+## HTTP headers
+
+The `/ai/stream` endpoint sets three headers critical for SSE to work through nginx:
+
+```python
+headers = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",   # disables nginx response buffering
+}
+return StreamingResponse(generator(), media_type="text/event-stream", headers=headers)
+```
+
+`X-Accel-Buffering: no` is essential — without it, nginx buffers the entire response before forwarding, which defeats the purpose of streaming.
+
+---
+
+## Flutter SSE parsing
+
+```dart
+// ai_service.dart
+Stream<AiEvent> streamAsk(String query, List<Message> history) async* {
+    final request = http.Request('POST', Uri.parse('$baseUrl/ai/stream'));
+    request.body = jsonEncode({...});
+    final streamedResponse = await client.send(request);
+
+    await for (final chunk in streamedResponse.stream.transform(utf8.decoder)) {
+        for (final line in chunk.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            final json = jsonDecode(line.substring(6));
+            yield AiEvent.fromJson(json);
+        }
+    }
+}
+```
+
+The provider in `chat_provider.dart` listens to this stream and updates state for each event type, triggering selective widget rebuilds via Riverpod.
+
+---
+
+## Non-streaming endpoint
+
+`POST /ai/ask` runs the same pipeline but collects all SSE events internally and returns a single `AgentResponse`. Use this for programmatic calls where you don't need real-time streaming:
+
+```bash
+curl -X POST http://localhost:8000/ai/ask \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is my net worth?", "user_id": "uuid"}'
+```
+
+Response:
+```json
+{
+  "text": "Your net worth is S$15,270...",
+  "widgets": [],
+  "suggestions": ["Show me my assets vs liabilities"],
+  "agent_used": "wealth",
+  "tools_used": ["get_portfolio", "query_transactions", "get_debts"]
+}
+```

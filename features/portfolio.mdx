@@ -1,55 +1,229 @@
 ---
 title: "Portfolio Tracker"
-description: "Track stocks, crypto, ETFs, and other assets with live market prices."
+description: "Track stocks, crypto, ETFs, and other assets with live prices — including the multi-currency FX conversion internals."
 ---
 
-## Asset types supported
+## Asset types
 
-| Type | Examples | Price source |
-|------|---------|-------------|
-| Stock | AAPL, MSFT, RELIANCE.NS | Yahoo Finance (yfinance) |
-| Crypto | BTC, ETH, SOL | CoinGecko |
-| ETF | SPY, QQQ, CSPX.L | Yahoo Finance |
-| Bond | — | Manual |
-| REIT | CICT.SI, PLD | Yahoo Finance |
-| Commodity | GLD, SLV | Yahoo Finance |
-
----
-
-## Features
-
-**Portfolio overview**
-- Total market value in your preferred currency (SGD, INR, USD)
-- Total cost basis and overall return %
-- Visual heatmap — green = gains, red = losses, sized by allocation
-
-**Per-holding detail**
-- Current price with daily change
-- Cost basis vs current value
-- P&L in absolute and percentage terms
-- Historical price chart with period selector: 1W / 1M / 3M / 6M / 1Y / ALL
-- Allocation % within your portfolio
-
-**Analytics**
-- Allocation breakdown by asset type and currency
-- Concentration risk — HHI index, top holdings %
-- Diversification score
+| Type | Examples | Price source | Notes |
+|------|---------|-------------|-------|
+| Stock | AAPL, MSFT, RELIANCE.NS | Yahoo Finance (yfinance) | Suffix determines exchange |
+| Crypto | BTC, ETH, SOL | CoinGecko API | Always priced in USD |
+| ETF | SPY, QQQ, CSPX.L, ES3.SI | Yahoo Finance | |
+| REIT | CICT.SI, PLD | Yahoo Finance | |
+| Commodity | GLD, SLV | Yahoo Finance | Traded as ETFs, not spot |
+| Bond | — | Manual (avg price) | No live pricing |
+| Fixed Deposit | — | Calculated | Interest accrual formula |
+| Real Estate | — | Manual | No live pricing |
 
 ---
 
-## Multi-currency
+## Multi-currency architecture
 
-Holdings can be denominated in any currency. The portfolio converts everything to your preferred display currency using live exchange rates. For example, a USD stock holding is shown in SGD equivalent using the current USD/SGD rate.
+Every holding has a `currency` field (the currency it's traded in). The app displays everything in your chosen display currency (SGD, INR, or USD) using live exchange rates.
 
-Crypto assets always use USD as the base and then convert.
+### The effectiveCurrency pattern
+
+Crypto is the edge case: CoinGecko always returns prices in USD regardless of what's in the `currency` field. So the provider overrides it:
+
+```dart
+final effectiveCurrency = h.holding.assetType == AssetType.crypto
+    ? 'USD'
+    : h.holding.currency;
+
+// Build the forex pair key for lookup
+final rateKey = '$effectiveCurrency$displayCurrency'; // e.g. "USDSGD"
+final fxRate = fxRates[rateKey] ?? 1.0;
+final convertedValue = marketValue * fxRate;
+```
+
+If `displayCurrency == effectiveCurrency`, the rate key resolves to e.g. `"SGDSGD"` which returns 1.0 — no conversion needed.
+
+### Shared forex rates provider
+
+All portfolio providers share a single forex fetch per render cycle:
+
+```dart
+final portfolioFxRatesProvider = FutureProvider<Map<String, double>>((ref) async {
+    final holdings = await ref.watch(holdingsProvider.future);
+    final displayCurrency = ref.watch(currencyProvider);
+
+    // Collect unique foreign currencies in this portfolio
+    final needed = <String>{};
+    for (final h in holdings) {
+        final eff = h.assetType == AssetType.crypto ? 'USD' : h.currency;
+        if (eff != displayCurrency) needed.add('$eff$displayCurrency');
+    }
+    // Always include USD if portfolio has crypto and display != USD
+    if (holdings.any((h) => h.assetType == AssetType.crypto) && displayCurrency != 'USD') {
+        needed.add('USD$displayCurrency');
+    }
+
+    return marketService.getForexRates(needed.toList());
+});
+```
+
+This results in exactly one forex HTTP call per portfolio screen load, regardless of how many different currencies are in the portfolio.
+
+### Format helpers
+
+```dart
+// Use formatConverted when the value needs FX conversion
+// (individual holding tiles, cost basis per holding)
+formatConverted(value, displayCurrency, rates, baseCurrency: effectiveCurrency)
+// → applies fxRates['USDSGD'] conversion
+
+// Use format when value is already in displayCurrency
+// (hero total, pre-summed market value)
+format(value, displayCurrency)
+// → no conversion, just number formatting
+```
+
+Mixing these up is the most common bug in portfolio display code — hero totals that run their own FX-summed loop use `format()`, per-holding tiles use `formatConverted()`.
 
 ---
 
-## Live prices
+## Live price fetching
 
-Prices are fetched from the FastAPI backend on demand:
-- Stocks and ETFs → Yahoo Finance via `yfinance`
-- Crypto → CoinGecko public API
-- Exchange rates → Yahoo Finance
+### Caching and deduplication
 
-Prices are TTL-cached for 60 seconds in the backend to avoid rate limits.
+The `MarketDataService` has two layers of deduplication:
+
+**1. TTL cache (60 seconds)**
+```dart
+final _stockCache = <String, _CacheEntry<Map<String, StockPriceData>>>{};
+// Cache key: sorted symbols joined with commas → "AAPL,MSFT,TSLA"
+```
+
+**2. In-flight Completer deduplication**
+```dart
+final _inflightStock = <String, Completer<Map<String, StockPriceData>>>{};
+// If holdingsProvider and heatmapProvider both fire for same symbols at the same time,
+// the second call gets the first call's future — zero duplicate HTTP requests.
+```
+
+### Batch endpoint
+
+The `/market/batch` endpoint combines stocks + crypto + forex into a single call:
+
+```dart
+Future<BatchMarketData> getBatchData({
+    List<String> stockSymbols = const [],
+    List<String> cryptoIds = const [],
+    List<String> forexPairs = const [],
+})
+```
+
+Used by `holdingsWithPricesProvider` to hydrate the full portfolio in one round trip.
+
+### Asset-specific price logic
+
+**Fixed Deposits — accrual formula:**
+```dart
+double _calculateFDCurrentValue(Holding h) {
+    // Rate parsed from notes field via regex: r'\d+\.?\d*%'
+    // e.g. notes = "3.5% p.a." → rate = 3.5
+    final rateMatch = RegExp(r'(\d+\.?\d*)%').firstMatch(h.notes ?? '');
+    final rate = double.tryParse(rateMatch?.group(1) ?? '') ?? 0.0;
+    final years = DateTime.now().difference(h.purchaseDate!).inDays / 365.0;
+    return h.quantity * h.avgPrice * (1 + rate / 100 * years);
+}
+```
+
+**Metals — ETF proxies:**
+GLD, SLV, PDBC are fetched as normal yfinance tickers (they're ETFs, not spot commodity prices). `getMetalPrice()` maps semantic names:
+```dart
+// gold → XAU=F (futures), silver → SI=F, etc.
+// Used only if user enters the metal name directly rather than the ETF ticker
+```
+
+**Crypto — CoinGecko ID normalisation:**
+CoinGecko IDs are lowercase (`bitcoin`, `ethereum`, `solana`). The holding's `symbol` field is stored in uppercase by convention. The service normalises:
+```dart
+final coinId = h.symbol.toLowerCase();
+```
+
+---
+
+## Portfolio calculations
+
+### Cost basis
+```
+costBasis = Σ (quantity × avgPrice × fxRate)
+```
+`avgPrice` is stored in the holding's original currency. FX conversion applied at display time.
+
+### Market value
+```
+marketValue = Σ (quantity × currentPrice × fxRate)
+```
+`currentPrice` comes from the live price fetch. Falls back to `avgPrice` on fetch failure.
+
+### Return
+```
+totalReturn% = ((marketValue - costBasis) / costBasis) × 100
+```
+
+### Unrealised P&L per holding
+```
+pnl = quantity × (currentPrice - avgPrice)
+pnl% = ((currentPrice - avgPrice) / avgPrice) × 100
+```
+
+---
+
+## Historical charts
+
+The asset detail screen fetches OHLCV history for period selector tabs (1W / 1M / 3M / 6M / 1Y / ALL):
+
+```dart
+// assetType differentiates the backend endpoint called
+ref.watch(assetHistoryProvider((symbol: 'AAPL', period: '1mo', assetType: 'stock')))
+```
+
+Backend maps period strings to yfinance parameters:
+
+| Period label | yfinance period | yfinance interval |
+|-------------|----------------|-------------------|
+| 1W | `5d` | `1h` |
+| 1M | `1mo` | `1d` |
+| 3M | `3mo` | `1d` |
+| 6M | `6mo` | `1d` |
+| 1Y | `1y` | `1wk` |
+| ALL | `max` | `1mo` |
+
+Crypto history uses CoinGecko's `/coins/{id}/market_chart` endpoint with equivalent day ranges.
+
+---
+
+## Portfolio sparkline (14-day)
+
+The dashboard hero sparkline aggregates the last 14 days of portfolio value:
+
+```dart
+final portfolioSparklineProvider = FutureProvider<List<double>>((ref) async {
+    // Splits holdings into two groups:
+    // market: stocks/crypto that have yfinance/CoinGecko history
+    // non-market: FD/bonds/real estate (use avgPrice as flat line)
+    //
+    // For market holdings: fetch 14d history per symbol, multiply by quantity, sum daily
+    // For non-market: add flat contribution to every day
+    // Returns 14 data points
+});
+```
+
+---
+
+## Heatmap
+
+The heatmap widget sizes each tile by portfolio allocation weight and colours by day change %:
+
+| Day change | Colour |
+|-----------|--------|
+| > +2% | `#10B981` bright |
+| +0.5% to +2% | `#10B981` muted |
+| -0.5% to +0.5% | `#F59E0B` amber |
+| -0.5% to -2% | `#EF4444` muted |
+| < -2% | `#EF4444` bright |
+
+Tile size is proportional to `currentValue / totalPortfolioValue`.
