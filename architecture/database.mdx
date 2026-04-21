@@ -1,0 +1,411 @@
+---
+title: "Database Schema"
+description: "Complete Supabase schema — all tables, RLS policies, indexes, migrations, and PostgreSQL functions."
+---
+
+Vantage uses Supabase (PostgreSQL) as its primary database. Row-Level Security (RLS) is enabled on every table — users can only access their own data, enforced at the database level regardless of which client is querying.
+
+---
+
+## Migrations overview
+
+| File | What it adds |
+|------|-------------|
+| `001_initial_schema.sql` | Core tables, RLS policies, indexes |
+| `002_seed_data.sql` | Demo data for new accounts |
+| `003_accounts_advanced.sql` | Auth trigger, seed remap function |
+| `004_transfers.sql` | `transfer_id` column on transactions |
+| `005_rag_embeddings.sql` | pgvector extension, `user_embeddings` table, hybrid search |
+| `011_rag_fcm.sql` | Transaction embeddings (1024-dim), FCM tokens, FTS search vector, pg_cron |
+| `012_rag_search.sql` | FTS + semantic search functions |
+
+---
+
+## Core tables
+
+### `users`
+
+```sql
+CREATE TABLE users (
+  id                 uuid PRIMARY KEY REFERENCES auth.users ON DELETE CASCADE,
+  email              text UNIQUE NOT NULL,
+  display_name       text,
+  preferred_currency text DEFAULT 'SGD',
+  avatar_url         text,
+  created_at         timestamptz DEFAULT now()
+);
+```
+
+Auto-populated via trigger on `auth.users` insert. `preferred_currency` drives all display formatting in the Flutter app.
+
+---
+
+### `accounts`
+
+```sql
+CREATE TABLE accounts (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  name           text NOT NULL,
+  type           text CHECK (type IN ('checking','savings','credit_card','loan','investment','cash')),
+  institution    text,
+  currency       text DEFAULT 'SGD',
+  balance        numeric DEFAULT 0,
+  credit_limit   numeric,          -- credit_card only
+  statement_day  int,              -- credit_card: day of month statement closes
+  payment_day    int,              -- credit_card: day payment is due
+  livery_color   text,             -- hex e.g. '#E63946' — card UI gradient
+  last_synced    timestamptz,
+  created_at     timestamptz DEFAULT now()
+);
+```
+
+`livery_color` drives the card gradient on the Accounts Hub screen. `statement_day` is used for the credit card billing cycle calculation in balance reconciliation.
+
+---
+
+### `transactions`
+
+```sql
+CREATE TABLE transactions (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id               uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  account_id            uuid REFERENCES accounts ON DELETE SET NULL,
+  amount                numeric NOT NULL,
+  currency              text NOT NULL,
+  merchant              text,
+  category              text,
+  source                text DEFAULT 'manual'
+                        CHECK (source IN ('notification','manual','import')),
+  status                text DEFAULT 'pending'
+                        CHECK (status IN ('pending','approved','edited')),
+  transfer_id           uuid,         -- links paired transfer transactions
+  raw_notification_text text,
+  parsed_at             timestamptz,
+  created_at            timestamptz DEFAULT now(),
+  search_vector         tsvector      -- auto-populated by trigger for FTS
+);
+```
+
+**Indexes:**
+```sql
+CREATE INDEX idx_transactions_user_created  ON transactions (user_id, created_at DESC);
+CREATE INDEX idx_transactions_user_category ON transactions (user_id, category);
+CREATE INDEX idx_transactions_user_merchant ON transactions (user_id, merchant);
+CREATE INDEX idx_transactions_transfer_id   ON transactions (transfer_id) WHERE transfer_id IS NOT NULL;
+CREATE INDEX idx_transactions_search        ON transactions USING gin(search_vector);
+```
+
+**FTS trigger:**
+```sql
+CREATE TRIGGER transactions_search_vector_trigger
+  BEFORE INSERT OR UPDATE ON transactions
+  FOR EACH ROW EXECUTE FUNCTION
+    tsvector_update_trigger(search_vector, 'pg_catalog.english', merchant, category);
+```
+
+---
+
+### `holdings`
+
+```sql
+CREATE TABLE holdings (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  symbol        text NOT NULL,
+  asset_type    text CHECK (asset_type IN
+                  ('stock','crypto','etf','bond','reit','commodity','fd','real_estate','other')),
+  quantity      numeric NOT NULL,
+  avg_price     numeric NOT NULL,
+  purchase_date date,
+  currency      text NOT NULL,
+  exchange      text,
+  notes         text,       -- FD interest rate stored here: "3.5% p.a."
+  created_at    timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_holdings_user_symbol ON holdings (user_id, symbol);
+```
+
+---
+
+### `budgets`
+
+```sql
+CREATE TABLE budgets (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  category   text NOT NULL,
+  amount     numeric NOT NULL,
+  currency   text NOT NULL,
+  period     text DEFAULT 'monthly' CHECK (period IN ('monthly','weekly')),
+  active     boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_budgets_user_active ON budgets (user_id) WHERE active = true;
+```
+
+---
+
+### `groups` and `debts`
+
+```sql
+CREATE TABLE groups (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       text NOT NULL,
+  members    text[],   -- array of user UUIDs as strings (supports non-registered contacts)
+  created_by uuid REFERENCES users ON DELETE SET NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE debts (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  creditor_id  text NOT NULL,   -- text, not uuid — supports non-Vantage contacts
+  debtor_id    text NOT NULL,
+  amount       numeric NOT NULL,
+  currency     text NOT NULL,
+  description  text,
+  group_id     uuid REFERENCES groups ON DELETE SET NULL,
+  status       text DEFAULT 'pending' CHECK (status IN ('pending','settled')),
+  settled_at   timestamptz,
+  created_at   timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_debts_creditor ON debts (creditor_id);
+CREATE INDEX idx_debts_debtor   ON debts (debtor_id);
+```
+
+`creditor_id` and `debtor_id` are `text` (not `uuid`) to allow debts with non-registered contacts — a friend without a Vantage account can still appear as a party in a split.
+
+---
+
+### `bill_splits`
+
+```sql
+CREATE TABLE bill_splits (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id             uuid REFERENCES groups ON DELETE SET NULL,
+  payer_id             uuid REFERENCES users ON DELETE SET NULL,
+  total                numeric NOT NULL,
+  tax_pct              numeric DEFAULT 0,
+  service_charge_pct   numeric DEFAULT 0,
+  items                jsonb,    -- [{name, price, quantity, shared_by: [user_ids]}]
+  splits               jsonb,    -- computed: {user_id: amount_owed}
+  created_at           timestamptz DEFAULT now()
+);
+```
+
+---
+
+### `user_insights`
+
+AI-generated insights written by the AnomalyAlerts agent. Read by the Dashboard's real-time insights feed.
+
+```sql
+CREATE TABLE user_insights (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  insight_type text CHECK (insight_type IN
+                  ('spending_anomaly','duplicate_charge','budget_warning',
+                   'budget_exceeded','saving_tip','portfolio_alert')),
+  title        text NOT NULL,
+  message      text,
+  widget_data  jsonb,       -- agent widget JSON (chart, card, etc.)
+  priority     int DEFAULT 0,
+  confidence   numeric,     -- 0.0–1.0
+  expires_at   timestamptz,
+  dismissed_at timestamptz,
+  created_at   timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_user_insights_active
+  ON user_insights (user_id, created_at DESC)
+  WHERE dismissed_at IS NULL;
+```
+
+---
+
+### `ai_conversations`
+
+```sql
+CREATE TABLE ai_conversations (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  messages   jsonb DEFAULT '[]',   -- [{role, content, timestamp}]
+  embedding  vector(1024),
+  search_vector tsvector,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_ai_conversations_user ON ai_conversations (user_id, created_at DESC);
+CREATE INDEX ON ai_conversations USING ivfflat (embedding vector_cosine_ops) WITH (lists=20);
+CREATE INDEX ON ai_conversations USING gin(search_vector);
+```
+
+---
+
+### `user_embeddings`
+
+RAG memory store — daily/weekly/monthly financial summaries embedded at 384 dimensions (BAAI/bge-small-en-v1.5).
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE user_embeddings (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+  content      text NOT NULL,
+  embedding    vector(384),
+  content_type text CHECK (content_type IN
+                  ('daily_summary','weekly_summary','monthly_summary',
+                   'insight','conversation_summary','pattern')),
+  metadata     jsonb,
+  expires_at   timestamptz,
+  created_at   timestamptz DEFAULT now()
+);
+
+-- HNSW index — fast approximate nearest-neighbour at query time
+CREATE INDEX ON user_embeddings
+  USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX idx_embeddings_user ON user_embeddings (user_id);
+CREATE INDEX idx_embeddings_type ON user_embeddings (content_type);
+```
+
+---
+
+### `transaction_embeddings`
+
+Per-transaction semantic search — embedded at 1024 dimensions (Voyage 3-Lite).
+
+```sql
+CREATE TABLE transaction_embeddings (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_id uuid NOT NULL REFERENCES transactions ON DELETE CASCADE,
+  user_id        uuid NOT NULL REFERENCES auth.users ON DELETE CASCADE,
+  content        text,
+  embedding      vector(1024),
+  created_at     timestamptz DEFAULT now(),
+  UNIQUE (transaction_id)
+);
+
+CREATE INDEX ON transaction_embeddings
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 50);
+
+CREATE INDEX idx_txn_embeddings_user ON transaction_embeddings (user_id);
+```
+
+---
+
+### `fcm_tokens`
+
+```sql
+CREATE TABLE fcm_tokens (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL REFERENCES auth.users ON DELETE CASCADE,
+  token       text NOT NULL,
+  device_info text,
+  created_at  timestamptz DEFAULT now(),
+  updated_at  timestamptz DEFAULT now(),
+  UNIQUE (user_id, token)
+);
+
+CREATE INDEX idx_fcm_tokens_user ON fcm_tokens (user_id);
+```
+
+---
+
+## Row-Level Security policies
+
+All tables have `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`. Key policy patterns:
+
+```sql
+-- Standard user isolation (transactions, holdings, budgets, insights, etc.)
+CREATE POLICY "users_own_data" ON transactions
+  USING (auth.uid() = user_id);
+
+-- Asset prices: anyone authenticated can read, only service role writes
+CREATE POLICY "read_asset_prices" ON asset_prices
+  FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "service_write_prices" ON asset_prices
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- Groups: members can read/write their own groups
+CREATE POLICY "group_members" ON groups
+  USING (auth.uid()::text = ANY(members));
+
+-- Debts: visible to creditor or debtor (text cast required)
+CREATE POLICY "debt_parties" ON debts
+  USING (
+    auth.uid()::text = creditor_id OR
+    auth.uid()::text = debtor_id
+  );
+```
+
+---
+
+## PostgreSQL functions
+
+### `handle_new_user()` — auth trigger
+
+Fires on every new `auth.users` insert. Creates a matching `public.users` row with name/avatar extracted from OAuth metadata:
+
+```sql
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.users (id, email, display_name, avatar_url)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name'),
+    NEW.raw_user_meta_data->>'avatar_url'
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+### `remap_seed_data(old_uid, new_uid)` — first sign-in
+
+Updates every foreign key and array member across all tables from the demo UUID to the real user's UUID:
+
+```sql
+UPDATE public.users      SET id = new_uid WHERE id = old_uid;
+UPDATE transactions      SET user_id = new_uid WHERE user_id = old_uid;
+UPDATE holdings          SET user_id = new_uid WHERE user_id = old_uid;
+UPDATE accounts          SET user_id = new_uid WHERE user_id = old_uid;
+UPDATE budgets           SET user_id = new_uid WHERE user_id = old_uid;
+UPDATE debts             SET creditor_id = new_uid::text WHERE creditor_id = old_uid::text;
+UPDATE debts             SET debtor_id   = new_uid::text WHERE debtor_id   = old_uid::text;
+UPDATE groups            SET members = array_replace(members, old_uid::text, new_uid::text);
+UPDATE user_insights     SET user_id = new_uid WHERE user_id = old_uid;
+```
+
+### `hybrid_search(query_embedding, query_text, user_id, count, fts_weight, semantic_weight)`
+
+Combines pgvector cosine similarity with PostgreSQL FTS, returned as a weighted score:
+
+```sql
+score = fts_weight * fts_score + semantic_weight * semantic_score
+-- Default weights: fts=0.3, semantic=0.7
+```
+
+Used by the RAG pipeline to retrieve relevant context before AI responses.
+
+---
+
+## pg_cron scheduled job
+
+Runs daily at 00:30 UTC (08:30 SGT) to generate daily insights:
+
+```sql
+SELECT cron.schedule(
+  'daily-insights-generation',
+  '30 0 * * *',
+  $$SELECT net.http_post(url := 'https://your-backend.com/ai/daily-insights', ...)$$
+);
+```

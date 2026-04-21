@@ -1,0 +1,241 @@
+---
+title: "Backend Architecture"
+description: "FastAPI server setup, routers, middleware, services, caching, and scheduled jobs."
+---
+
+The backend is a Python 3.11+ FastAPI app hosted on AWS EC2. It handles three concerns: **market data** (prices + forex), **AI agent orchestration**, and **CRUD** for transactions, holdings, and accounts.
+
+---
+
+## Server setup
+
+```python
+# backend/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+
+app = FastAPI(title="Vantage Wealth API", version="2.0.0")
+
+# Compress responses > 1000 bytes
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# CORS — defaults to ["*"] if ALLOWED_ORIGINS not set
+origins = os.getenv("ALLOWED_ORIGINS", "").split(",") or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=bool(origins != ["*"]),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+---
+
+## Routers
+
+```mermaid
+flowchart LR
+    Client([Flutter app]) --> F[FastAPI\nmain.py]
+    F --> M[/market]
+    F --> A[/ai]
+    F --> T[/transactions]
+    F --> H[/holdings]
+    F --> AC[/accounts]
+    F --> N[/newsletter]
+    F --> NF[/notifications]
+    F --> R[/rag]
+    M --> YF[yfinance]
+    M --> CG[CoinGecko]
+    A --> Claude[Anthropic API]
+    A --> SB[(Supabase)]
+    T --> SB
+    H --> SB
+    AC --> SB
+
+    style Client fill:#10B981,color:#fff
+    style F fill:#1C1E26,color:#F0F2F5
+    style SB fill:#1C1E26,color:#F0F2F5
+```
+
+### `/market` — market data
+
+| Endpoint | Description | TTL cache |
+|----------|-------------|-----------|
+| `GET /market/stock/{symbol}` | Single stock price + change % | 60s |
+| `POST /market/stocks` | Batch stock prices | 60s |
+| `GET /market/crypto/{id}` | Single crypto price (CoinGecko) | 60s |
+| `POST /market/crypto` | Batch crypto prices | 60s |
+| `POST /market/forex` | Exchange rates for pairs list | 5 min |
+| `POST /market/batch` | Stocks + crypto + forex in one call | 60s |
+| `GET /market/history/{symbol}` | OHLCV history (period + assetType) | 5 min |
+| `GET /market/earnings` | Earnings calendar | 1 hour |
+
+### `/ai` — agent endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /ai/ask` | Non-streaming orchestrated response |
+| `POST /ai/stream` | SSE streaming response |
+| `POST /ai/parse-bill` | Extract line items from bill text/image (Haiku) |
+| `POST /ai/parse-notification` | Extract transaction from notification text (Haiku) |
+| `GET /ai/daily-insights` | Run AnomalyAlerts, return insight list |
+
+### `/transactions`, `/holdings`, `/accounts`
+
+Standard CRUD. All endpoints require JWT auth via `get_current_user` dependency. All Supabase queries are scoped to `user_id` and protected by RLS.
+
+### `/newsletter`
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /newsletter/latest` | Most recent newsletter for user |
+| `GET /newsletter/today` | Today's newsletter (null if not yet generated) |
+| `POST /newsletter/generate` | Trigger generation immediately |
+
+### `/rag`
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /rag/ingest` | Manual ingestion trigger (admin, query param `user_id`) |
+
+---
+
+## TTL cache
+
+```python
+# backend/services/cache.py
+class TTLCache:
+    def __init__(self):
+        self._store: dict[str, tuple[Any, float]] = {}
+
+    def get(self, key: str) -> Any | None:
+        if key not in self._store:
+            return None
+        value, expires_at = self._store[key]
+        if time.time() > expires_at:
+            del self._store[key]
+            return None
+        return value
+
+    def set(self, key: str, value: Any, ttl_seconds: int = 60):
+        self._store[key] = (value, time.time() + ttl_seconds)
+```
+
+Cache instances:
+- `price_cache` — stocks and crypto (60s TTL)
+- `forex_cache` — currency pairs (300s TTL)
+- `auth_cache` — validated JWTs (300s TTL)
+- `history_cache` — OHLCV data (300s TTL)
+- `earnings_cache` — earnings calendar (3600s TTL)
+
+All caches are in-memory, per-process. On EC2, a single uvicorn worker handles all requests — no Redis needed at MVP scale.
+
+---
+
+## Supabase client
+
+```python
+# backend/services/supabase_client.py
+_client: Client | None = None
+
+def get_supabase() -> Client:
+    global _client
+    if _client is None:
+        _client = create_client(
+            os.environ["SUPABASE_URL"],
+            os.environ["SUPABASE_SERVICE_KEY"],  # service role — bypasses RLS for admin ops
+        )
+    return _client
+```
+
+The backend uses the **service role key** (not the anon key). This allows writing to tables like `user_insights` and `user_newsletters` without being blocked by user-scoped RLS. User data access is still scoped by passing `user_id` explicitly to all queries.
+
+---
+
+## Claude clients
+
+```python
+# backend/services/claude_client.py
+claude_haiku = AsyncAnthropic()   # model: claude-haiku-4-5
+claude_sonnet = AsyncAnthropic()  # model: claude-sonnet-4-5
+```
+
+Two logical clients, same `AsyncAnthropic` instance under the hood. Model is specified per-call:
+
+| Use case | Model |
+|----------|-------|
+| Intent classification (fallback) | `claude-haiku-4-5` |
+| Bill parsing | `claude-haiku-4-5` |
+| Notification parsing | `claude-haiku-4-5` |
+| News curation (newsletter) | `claude-haiku-4-5` |
+| Specialist agent responses | `claude-sonnet-4-5` |
+| Newsletter synthesis | `claude-sonnet-4-5` |
+
+Haiku is used wherever the task is classification or extraction (cheap, fast). Sonnet is used wherever reasoning or synthesis is required (higher quality).
+
+---
+
+## APScheduler — background jobs
+
+Three RAG ingestion jobs run automatically:
+
+```python
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+scheduler = AsyncIOScheduler()
+
+# Daily at 2:00 AM UTC
+scheduler.add_job(run_daily_ingestion,   'cron', hour=2,  minute=0)
+
+# Weekly Sunday at 3:00 AM UTC
+scheduler.add_job(run_weekly_ingestion,  'cron', day_of_week='sun', hour=3, minute=0)
+
+# Monthly 1st at 4:00 AM UTC
+scheduler.add_job(run_monthly_ingestion, 'cron', day=1, hour=4, minute=0)
+
+scheduler.start()
+```
+
+Each job fetches all users from Supabase, generates a summary string for each, embeds it via the BAAI embedding server, and upserts into `user_embeddings`.
+
+---
+
+## Environment variables
+
+```bash
+# Required
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJh...       # service role key — never the anon key
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional
+ALLOWED_ORIGINS=https://yourdomain.com  # defaults to * if unset
+EMBEDDING_SERVER_URL=http://localhost:8001  # Docker embedding server
+PORT=8000
+```
+
+---
+
+## Health check
+
+```bash
+GET /health
+→ {"status": "ok", "version": "2.0.0"}
+```
+
+Used by nginx upstream checks and monitoring. No auth required.
+
+---
+
+## Production deployment
+
+The full deployment guide is in [Self-Hosting → EC2 Deployment](/self-hosting/ec2-deployment). Summary:
+
+- **uvicorn** with `--workers 1` (single process — in-memory caches are process-local)
+- **nginx** reverse proxy on port 443, forwards to uvicorn on 8000
+- **systemd** service for auto-restart on crash
+- **Certbot** for TLS certificate
+
+For higher load: run multiple workers behind nginx with load balancing, but switch the in-memory cache to Redis to share state across workers.

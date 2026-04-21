@@ -105,6 +105,22 @@
         ]
       },
       {
+        "tab": "Architecture",
+        "groups": [
+          {
+            "group": "System Design",
+            "pages": [
+              "architecture/backend",
+              "architecture/frontend",
+              "architecture/database",
+              "architecture/auth",
+              "architecture/notifications",
+              "architecture/offline"
+            ]
+          }
+        ]
+      },
+      {
         "tab": "Self-Hosting",
         "groups": [
           {

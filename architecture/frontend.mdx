@@ -1,0 +1,278 @@
+---
+title: "Frontend Architecture"
+description: "Riverpod provider graph, go_router navigation, theme system, and Flutter patterns used throughout the app."
+---
+
+## Stack overview
+
+| Layer | Technology |
+|-------|-----------|
+| UI framework | Flutter 3.x, Material 3 |
+| State management | flutter_riverpod |
+| Navigation | go_router with StatefulShellRoute |
+| Local DB | sqflite_sqlcipher (encrypted SQLite) |
+| Charts | syncfusion_flutter_charts + fl_chart |
+| OCR | google_ml_kit (on-device) |
+| Notifications | Native Kotlin + platform channel |
+| Auth | Supabase Flutter SDK |
+
+---
+
+## Navigation
+
+The app uses a `StatefulShellRoute.indexedStack` for the 5 bottom-nav tabs. Each branch has its own `GlobalKey<NavigatorState>` — tab state is preserved when switching between tabs.
+
+```mermaid
+flowchart TD
+    R([GoRouter]) --> G{Redirect guard}
+    G -->|not logged in| Auth[/auth]
+    G -->|biometric timeout| Lock[/lock]
+    G -->|ok| Shell[StatefulShellRoute\n5 indexed branches]
+    Shell --> T0[/dashboard]
+    Shell --> T1[/spend]
+    Shell --> T2[/portfolio]
+    Shell --> T3[/accounts]
+    Shell --> T4[/social]
+    R --> Overlay[Full-screen overlays\nrootNavigatorKey]
+    Overlay --> Chat[/chat]
+    Overlay --> Add[/spend/add\n/portfolio/add\netc.]
+    Overlay --> Settings[/settings\n/newsletter]
+
+    style R fill:#10B981,color:#fff
+    style Shell fill:#1C1E26,color:#F0F2F5
+```
+
+Overlay routes use `parentNavigatorKey: _rootNavigatorKey` to render on top of the shell (above the bottom nav bar). The AI chat, add/edit screens, and settings are all overlays.
+
+### Floating pill navigation
+
+The bottom navigation is a custom floating glass pill — not Flutter's `BottomNavigationBar`. It uses `BackdropFilter` blur, a small mint dot for the active indicator, and `HapticFeedback.selectionClick()` on each tap.
+
+```dart
+// Active indicator: small green dot below icon
+if (isSelected)
+    Container(
+        width: 4, height: 4,
+        decoration: BoxDecoration(
+            color: VantageColors.growth,  // #10B981
+            shape: BoxShape.circle,
+        ),
+    )
+```
+
+---
+
+## Riverpod provider graph
+
+Providers are structured in layers. Lower layers feed upper layers — no circular dependencies.
+
+```
+Services (singletons)
+├── supabaseServiceProvider        → SupabaseService
+├── marketDataServiceProvider      → MarketDataService
+├── aiServiceProvider              → AiService
+└── syncServiceProvider            → SyncService
+
+Data providers (FutureProvider — Supabase queries)
+├── accountsProvider               → List<Account>
+├── transactionsProvider           → List<Transaction> (current month)
+├── holdingsProvider               → List<Holding>
+├── budgetsProvider                → List<Budget>
+├── debtSummaryProvider            → DebtSummary
+└── insightsProvider               → List<Insight> (undismissed)
+
+Market providers (FutureProvider — FastAPI calls)
+├── portfolioFxRatesProvider       → Map<String, double>
+├── holdingsWithPricesProvider     → List<HoldingWithPrice>
+├── portfolioCostBasisProvider     → double
+├── portfolioMarketValueProvider   → double
+├── portfolioReturnProvider        → double
+└── portfolioSparklineProvider     → List<double> (14 days)
+
+Computed providers
+├── dashboardSummaryProvider       → DashboardSummary (net worth, spend, debts)
+├── monthlyCashflowProvider        → List<MonthlyCashflow> (6 months)
+├── spendByCategoryProvider        → Map<String, double>
+└── assetHistoryProvider           → FutureProvider.family (symbol, period)
+
+UI state
+├── themeModeProvider              → StateNotifier<ThemeMode>
+├── currencyProvider               → StateProvider<String>
+└── chatProvider                   → StateNotifier<ChatState>
+```
+
+### Provider patterns
+
+**FutureProvider** — used for all async data fetches:
+```dart
+final transactionsProvider = FutureProvider<List<Transaction>>((ref) async {
+    final supabase = ref.watch(supabaseServiceProvider);
+    final userId = supabase.currentUserId;
+    final startOfMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+    return supabase.getTransactions(userId, since: startOfMonth);
+});
+```
+
+**FutureProvider.family** — for parameterised fetches:
+```dart
+final assetHistoryProvider = FutureProvider.family<List<OhlcvPoint>, AssetHistoryParams>(
+    (ref, params) async {
+        final service = ref.watch(marketDataServiceProvider);
+        return service.getHistory(params.symbol, params.period, params.assetType);
+    },
+);
+```
+
+**StateNotifier** — for mutable UI state:
+```dart
+class ChatNotifier extends StateNotifier<ChatState> {
+    ChatNotifier(this._aiService) : super(ChatState.initial());
+
+    Future<void> sendMessage(String text) async {
+        state = state.copyWith(isLoading: true);
+        await for (final event in _aiService.streamAsk(text, state.history)) {
+            state = _applyEvent(state, event);
+        }
+    }
+}
+```
+
+**AsyncValue** — all screens use `when()` to handle loading/error/data states — no raw null checks or loading booleans in UI code:
+```dart
+ref.watch(transactionsProvider).when(
+    loading: () => const SkeletonList(),
+    error: (e, _) => ErrorCard(message: e.toString()),
+    data: (txns) => TransactionList(transactions: txns),
+)
+```
+
+---
+
+## Theme system
+
+All colors, typography, and spacing are defined in `lib/core/theme/`:
+
+### Colors — `vantage_colors.dart`
+
+```dart
+abstract final class VantageColors {
+    // Semantic accents (shared light + dark)
+    static const Color growth  = Color(0xFF10B981); // Mint — gains, positive
+    static const Color warning = Color(0xFFF59E0B); // Amber — alerts
+    static const Color info    = Color(0xFF3B82F6); // Blue — informational
+    static const Color error   = Color(0xFFEF4444); // Red — errors only
+
+    // Dark mode (deep navy — Revolut/Mercury style)
+    static const Color darkBackground        = Color(0xFF0A0B0E); // scaffold
+    static const Color darkSurface           = Color(0xFF131418); // cards
+    static const Color darkSurfaceElevated   = Color(0xFF1C1E26); // elevated cards
+    static const Color darkBorder            = Color(0xFF252830);
+    static const Color darkTextPrimary       = Color(0xFFF0F2F5);
+    static const Color darkTextSecondary     = Color(0xFF6B7280);
+
+    // Light mode
+    static const Color lightBackground       = Color(0xFFF1F5F9);
+    static const Color lightSurface          = Color(0xFFFFFFFF);
+    static const Color lightTextPrimary      = Color(0xFF0F172A);
+    static const Color lightTextSecondary    = Color(0xFF64748B);
+}
+```
+
+### Typography — `vantage_typography.dart`
+
+Two font families, never mixed up:
+
+| Font | Usage |
+|------|-------|
+| **Inter** | All UI text: headings, labels, body, buttons |
+| **JetBrains Mono** | All financial numbers: prices, amounts, percentages, tickers |
+
+```dart
+// UI text
+static TextStyle headline(BuildContext context) =>
+    GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w700);
+
+// Financial numbers
+static TextStyle amount(BuildContext context) =>
+    GoogleFonts.jetBrainsMono(fontSize: 28, fontWeight: FontWeight.w600);
+```
+
+### Cards vs glass overlays
+
+**Standard cards** (`VantageCard`): 12px radius, `darkSurface` background, subtle shadow. No blur.
+
+**Glass overlays** (`GlassOverlay`): `BackdropFilter` with `ImageFilter.blur(sigmaX: 20, sigmaY: 20)`, semi-transparent background. Used only for the AI chat overlay and modal sheets.
+
+Blur is never applied to content cards — it's reserved for overlays to maintain visual hierarchy.
+
+### Spacing — `vantage_spacing.dart`
+
+4px base unit:
+```dart
+static const double xs  = 4;
+static const double sm  = 8;
+static const double md  = 16;
+static const double lg  = 24;
+static const double xl  = 32;
+static const double xxl = 48;
+```
+
+---
+
+## App lifecycle
+
+`VantageApp` is a `ConsumerStatefulWidget` that implements `WidgetsBindingObserver`:
+
+```dart
+void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+        _lastPausedAt = DateTime.now();
+    }
+
+    if (state == AppLifecycleState.resumed) {
+        // Biometric lock check
+        final elapsed = DateTime.now().difference(_lastPausedAt).inSeconds;
+        if (elapsed > 30 && _biometricEnabled) {
+            _router.go('/lock');
+            return;
+        }
+
+        // Refresh all providers
+        _prefetchProviders();
+
+        // Drain Android notification queue
+        NotificationService.drainQueue();
+
+        // Sync local → Supabase
+        SyncService.syncAll();
+
+        // Update home screen widgets
+        WidgetService.updateAll();
+    }
+}
+```
+
+---
+
+## Agent widget renderer
+
+The AI chat renders native Flutter widgets from JSON responses. `widget_renderer.dart` maps the `type` field to a widget:
+
+```dart
+Widget buildWidget(Map<String, dynamic> json) => switch (json['type']) {
+    'chart'        => AgentChart(data: json),
+    'card'         => AgentSummaryCard(data: json),
+    'alert'        => AgentAlertCard(data: json),
+    'multi_widget' => Column(children: [
+        for (final w in json['widgets']) buildWidget(w)
+    ]),
+    _ => const SizedBox.shrink(),
+};
+```
+
+Chart types map to Syncfusion or fl_chart widgets:
+- `bar` → `SfCartesianChart` with bar series
+- `line` → `SfCartesianChart` with line series
+- `pie` → `SfCircularChart`
+- `sparkline` → `SparklineChart` (custom widget)
