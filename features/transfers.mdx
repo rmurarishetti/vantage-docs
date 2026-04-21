@@ -7,11 +7,16 @@ description: "Move money between accounts with proper double-entry bookkeeping."
 
 When you transfer money between accounts (e.g. DBS → UOB, or pay your credit card bill), Vantage creates **two linked transactions** sharing the same `transfer_id` UUID:
 
-```
-Transfer: DBS → HSBC, SGD 500
+```mermaid
+flowchart LR
+    A([Transfer\nDBS → HSBC · SGD 500]) --> B[TX 1: DBS account\n−SGD 500 · Transfer]
+    A --> C[TX 2: HSBC account\n+SGD 500 · Transfer]
+    B <-->|shared transfer_id| C
+    B --> D([Excluded from\nspend analytics])
+    C --> D
 
-Transaction 1: DBS account,  +SGD 500, category: "Transfer"  (source)
-Transaction 2: HSBC account, -SGD 500, category: "Transfer"  (destination)
+    style A fill:#3B82F6,color:#fff
+    style D fill:#1C1E26,color:#F0F2F5
 ```
 
 Both transactions are excluded from spend analytics — they don't inflate your expense totals or distort category breakdowns.

@@ -44,21 +44,26 @@ The AI advisor connects to your real financial data. Everything it tells you is 
 
 ## How it works
 
-```
-Your question
-  ↓
-Two-tier router
-  ├── Regex classifier (handles ~70% of queries instantly)
-  └── Claude Haiku fallback (for ambiguous queries)
-  ↓
-Specialist agent (Claude Sonnet)
-  ↓
-Tool-use loop (parallel execution)
-  ├── Run relevant tools against your Supabase data
-  ├── Fetch live market prices if needed
-  └── Search RAG memory for context
-  ↓
-Streaming response (real-time token output)
+```mermaid
+flowchart TD
+    A([Your question]) --> B{Two-tier router}
+    B -->|regex match ~70%| C[Domain label\ncashflow · investment · debt · wealth · market]
+    B -->|ambiguous| D[Claude Haiku\none-shot classifier]
+    D --> C
+    C --> E[Specialist\nClaude Sonnet]
+    E --> F{Tool-use loop\nasyncio.gather}
+    F --> G[Supabase tools\nyour real data]
+    F --> H[Market tools\nyfinance · CoinGecko]
+    F --> I[RAG memory\npgvector context]
+    G --> E
+    H --> E
+    I --> E
+    E -->|end_turn| J([Streaming response\nreal-time tokens])
+
+    style A fill:#10B981,color:#fff
+    style J fill:#10B981,color:#fff
+    style E fill:#1C1E26,color:#F0F2F5
+    style F fill:#1C1E26,color:#F0F2F5
 ```
 
 The loading indicator in the app shows exactly what's happening: "Analyzing spending by category", "Fetching live price", "Computing net worth".

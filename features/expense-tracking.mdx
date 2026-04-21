@@ -7,21 +7,25 @@ description: "How Vantage captures transactions from banking notifications witho
 
 When your bank sends a push notification — "SGD 45.50 spent at Grab" — Vantage reads it in the background, extracts the amount, merchant, and card details, categorises it, and logs it to your database. All automatically, within seconds of the transaction.
 
-```
-Banking app sends notification
-  ↓
-VantageNotificationListener (native Kotlin, always running)
-  ↓
-SHA-256 dedup check (prevents duplicate entries)
-  ↓
-NotificationParser (regex patterns per bank)
-  ↓
-  ├── Match found → ParsedTransaction (amount, merchant, currency, card)
-  └── No match → Claude Haiku fallback (raw text → structured data)
-  ↓
-Supabase → transactions table
-  ↓
-Merchant categorisation (500+ mappings, AI fallback)
+```mermaid
+flowchart TD
+    A([Banking app push notification]) --> B[VantageNotificationListener\nnative Kotlin · always running]
+    B --> C{SHA-256 dedup\ncheck}
+    C -->|duplicate| X([Dropped])
+    C -->|new| D[NotificationParser\nregex patterns per bank]
+    D -->|match| E[ParsedTransaction\namount · merchant · currency · card]
+    D -->|no match| F[Claude Haiku fallback\nraw text → structured JSON]
+    F --> E
+    E --> G[(Supabase\ntransactions table)]
+    G --> H{Merchant\ncategorisation}
+    H -->|500+ exact mappings| I([Category assigned])
+    H -->|no mapping| J[Claude Haiku\ninfers category]
+    J --> I
+
+    style A fill:#10B981,color:#fff
+    style I fill:#10B981,color:#fff
+    style X fill:#EF4444,color:#fff
+    style G fill:#1C1E26,color:#F0F2F5
 ```
 
 ---

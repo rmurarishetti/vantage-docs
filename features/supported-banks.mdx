@@ -7,18 +7,20 @@ Vantage captures spending by listening to Android push notifications from your b
 
 ## How it works
 
-```
-Banking app sends push notification
-  ↓
-VantageNotificationListener (native Kotlin) intercepts it
-  ↓
-NotificationParser tries package-specific regex patterns
-  ↓ match              ↓ no match
-ParsedTransaction   Raw text sent to Claude Haiku
-  ↓                     ↓ (structured JSON returned)
-SHA-256 dedup check
-  ↓
-Saved to Supabase transactions table
+```mermaid
+flowchart TD
+    A([Push notification]) --> B[VantageNotificationListener\nnative Kotlin]
+    B --> C[NotificationParser\npackage-specific regex]
+    C -->|match| D[ParsedTransaction]
+    C -->|no match| E[Claude Haiku\nraw text → JSON]
+    E --> D
+    D --> F{SHA-256\ndedup}
+    F -->|duplicate| X([Dropped])
+    F -->|new| G[(Supabase\ntransactions)]
+
+    style A fill:#10B981,color:#fff
+    style G fill:#10B981,color:#fff
+    style X fill:#EF4444,color:#fff
 ```
 
 The parser runs **locally on your device** — notification text never leaves your phone except when Haiku fallback is triggered, in which case only the raw text string is sent (never the full notification object or any metadata).

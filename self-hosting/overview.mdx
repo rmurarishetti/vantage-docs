@@ -5,17 +5,17 @@ description: "Run Vantage entirely on your own infrastructure."
 
 ## Architecture
 
-```
-Your Android device
-  ↓ (HTTPS)
-FastAPI backend  ←→  Anthropic API (Claude)
-  ↓
-Supabase (your project)
-  PostgreSQL + Auth + Realtime + Storage
-  pgvector (for AI memory)
-  ↑
-Embedding server (Docker, optional)
-  BAAI/bge-small-en-v1.5
+```mermaid
+flowchart TD
+    A([Your Android device\nFlutter app]) -->|HTTPS| B[FastAPI backend\nVPS · EC2 · Railway]
+    B <-->|Claude API| C[Anthropic\nHaiku + Sonnet]
+    B <-->|yfinance · CoinGecko| D[Market data\nstocks · crypto · forex]
+    B <-->|service role key| E[(Supabase\nPostgreSQL + Auth\nRealtime + Storage\npgvector)]
+    F[Embedding server\nDocker · BAAI/bge-small-en-v1.5\noptional] -->|embeddings| E
+
+    style A fill:#10B981,color:#fff
+    style E fill:#1C1E26,color:#F0F2F5
+    style B fill:#1C1E26,color:#F0F2F5
 ```
 
 ---
